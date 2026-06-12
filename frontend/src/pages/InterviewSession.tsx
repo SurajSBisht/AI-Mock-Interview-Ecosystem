@@ -421,7 +421,15 @@ export function InterviewSession() {
     }
 
     recognition.onresult = (event: SpeechRecognitionEventLike) => {
+      // Debug: confirm recognition is actually producing events
+      console.log('[InterviewSession] onresult event:', {
+        resultIndex: event.resultIndex,
+        resultsLength: event.results?.length,
+        isFinal: event.results?.[event.resultIndex]?.isFinal,
+      })
+
       let transcript = ''
+
 
       for (let index = event.resultIndex; index < event.results.length; index += 1) {
         const result = event.results[index]
@@ -438,7 +446,13 @@ export function InterviewSession() {
     }
 
     recognition.onerror = (event: SpeechRecognitionErrorEventLike) => {
-      console.error('Speech recognition error:', event.error)
+      console.error('[InterviewSession] Speech recognition error:', {
+        error: event.error,
+        isListening: isListeningRef.current,
+        isSpeaking,
+        phase,
+      })
+
 
       if (
         (event.error === 'no-speech' || event.error === 'audio-capture') &&
@@ -594,6 +608,18 @@ export function InterviewSession() {
   useEffect(() => {
     setSpeechSupported(supportsSpeechRecognition(window))
   }, [])
+
+  // Helpful hint in console for Web Speech API failures
+  useEffect(() => {
+    const w = window as SpeechSupportWindow
+    if (!w.SpeechRecognition && !w.webkitSpeechRecognition) {
+      console.warn('[InterviewSession] Web Speech API not available in this browser')
+      return
+    }
+
+    console.warn('[InterviewSession] Web Speech API detected. If you see Speech recognition error: network, check microphone permissions, https requirement, and browser/network settings.')
+  }, [])
+
 
   useEffect(() => {
     if (phase !== 'live') {
