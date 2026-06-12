@@ -286,7 +286,15 @@ export function InterviewSession() {
     async (silenceDetected: boolean) => {
       const content = liveTranscript.trim()
 
-      if (!sessionId || !content) {
+      // Hard guard with logging so we can see why submit does nothing
+      if (!sessionId) {
+        console.warn('[InterviewSession] commitDraft blocked: missing sessionId')
+        alert('Interview not started yet (sessionId is missing). Please click “Begin AI Interview”.')
+        return false
+      }
+      if (!content) {
+        console.warn('[InterviewSession] commitDraft blocked: empty transcript')
+        alert('No transcript captured yet. Speak again or use Text Mode.')
         return false
       }
 
@@ -1256,20 +1264,40 @@ export function InterviewSession() {
                 )}
 
                 <div className="flex flex-col items-center justify-center p-4 bg-gray-50 dark:bg-gray-950 rounded-2xl border border-gray-100 dark:border-gray-800">
-                  <button
-                    type="button"
-                    onClick={toggleListening}
-                    disabled={!canUseMic && !isListening}
-                    className={cn(
-                      'rounded-full p-6 text-white transition-all duration-300 disabled:cursor-not-allowed disabled:opacity-30 shadow-lg',
-                      isListening 
-                        ? 'bg-danger hover:bg-rose-600 animate-pulse scale-105 shadow-danger/20' 
-                        : 'bg-primary hover:bg-indigo-600 shadow-primary/20 hover:scale-[1.05]'
-                    )}
-                    aria-label={isListening ? 'Stop recording and submit' : 'Start microphone'}
-                  >
-                    {isListening ? <MicOff className="h-7 w-7" /> : <Mic className="h-7 w-7" />}
-                  </button>
+                  <div className="flex items-center justify-center gap-3">
+                    <button
+                      type="button"
+                      onClick={toggleListening}
+                      disabled={!canUseMic && !isListening}
+                      className={cn(
+                        'rounded-full p-6 text-white transition-all duration-300 disabled:cursor-not-allowed disabled:opacity-30 shadow-lg',
+                        isListening
+                          ? 'bg-danger hover:bg-rose-600 animate-pulse scale-105 shadow-danger/20'
+                          : 'bg-primary hover:bg-indigo-600 shadow-primary/20 hover:scale-[1.05]',
+                      )}
+                      aria-label={isListening ? 'Stop recording and submit' : 'Start microphone'}
+                    >
+                      {isListening ? <MicOff className="h-7 w-7" /> : <Mic className="h-7 w-7" />}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        // Force-submit even if silence detection didn't fire
+                        void commitDraft(false)
+                      }}
+                      disabled={!isListening || isSpeaking || isAwaitingAI}
+                      className={cn(
+                        'rounded-full px-4 py-3 text-white text-xs font-bold transition shadow-lg',
+                        !isListening || isSpeaking || isAwaitingAI
+                          ? 'bg-gray-400 cursor-not-allowed opacity-70'
+                          : 'bg-success hover:bg-emerald-600'
+                      )}
+                      aria-label="Submit answer"
+                    >
+                      Submit
+                    </button>
+                  </div>
 
                   <p className="text-xs text-gray-500 dark:text-gray-400 mt-4 text-center max-w-sm leading-relaxed">
                     {isListening 
