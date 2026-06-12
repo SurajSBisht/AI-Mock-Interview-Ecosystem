@@ -392,6 +392,19 @@ export function InterviewSession() {
       return
     }
 
+    // Reset any existing recognition state before starting a new session
+    try {
+      recognitionRef.current?.stop()
+    } catch {
+      // ignore
+    }
+
+    recognitionRef.current = null
+
+    // Clear any previous transcript so UI reflects new input
+    setCurrentTranscript('')
+    setCurrentDraft('')
+
     const recognition = new SpeechRecognitionCtor()
     recognitionRef.current = recognition
     recognition.continuous = true
