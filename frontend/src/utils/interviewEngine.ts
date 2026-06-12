@@ -1,11 +1,13 @@
 import type { AIEvaluationResult, ConversationMessage, Response } from '../types'
 
-// Helper function to simulate network latency
+const BACKEND_URL = 'http://localhost:3000/api/interview'
+
+// Helper function to simulate network latency in fallback mode
 function sleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms))
 }
 
-// Extract a keyword from the answer to make follow-up questions feel context-aware
+// Extract a keyword from the answer to make fallback follow-up questions feel context-aware
 function extractKeyword(answer: string): string {
   const words = answer.toLowerCase().split(/\W+/)
   const stopWords = new Set([
@@ -22,7 +24,6 @@ function extractKeyword(answer: string): string {
     'now', 'really', 'also', 'worked', 'project', 'used', 'using', 'build', 'built', 'created'
   ])
 
-  // Look for longer words first
   const candidates = words
     .filter(w => w.length > 3 && !stopWords.has(w))
     .map(w => w.charAt(0).toUpperCase() + w.slice(1))
@@ -156,14 +157,39 @@ const BEHAVIORAL_QUESTIONS = [
 ]
 
 /**
- * Generates the initial interview intro and the first question.
- * FUTURE ACTION: Swap this with a backend request, e.g.
- * return fetch('/api/interview/start', {
- *   method: 'POST',
- *   body: JSON.stringify({ role, focusAreas, resumeContext })
- * }).then(r => r.json()).then(data => data.question);
+ * Generates the initial interview intro and first question.
+ * Calls backend if active, otherwise falls back to local client generator.
  */
 export async function generateInitialQuestion(
+  role: string,
+  focusAreas: string[],
+  resumeContext?: string
+): Promise<string> {
+  try {
+    const response = await fetch(`${BACKEND_URL}/start`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ role, focusAreas, resumeContext }),
+    })
+
+    if (!response.ok) {
+      throw new Error(`Server returned status: ${response.status}`)
+    }
+
+    const data = await response.json()
+    return data.question
+  } catch (err) {
+    console.warn('[AI Interviewer] Backend server start session failed. Falling back to local simulation.', err)
+    return generateInitialQuestionFallback(role, focusAreas, resumeContext)
+  }
+}
+
+/**
+ * Local fallback question generator (starts session)
+ */
+async function generateInitialQuestionFallback(
   role: string,
   focusAreas: string[],
   resumeContext?: string
@@ -178,7 +204,6 @@ export async function generateInitialQuestion(
     intro += ` I've also reviewed your background context and summary.`
   }
 
-  // Get a first question based on the first focus area
   let question = "Let's start by having you introduce yourself and tell me about a recent project you worked on, your role, and the technology stack."
   if (focusAreas && focusAreas.length > 0) {
     const firstArea = focusAreas[0]
@@ -192,12 +217,8 @@ export async function generateInitialQuestion(
 }
 
 /**
- * Generates the next question based on the interview turn and candidate's history.
- * FUTURE ACTION: Swap this with a backend request, e.g.
- * return fetch('/api/interview/next', {
- *   method: 'POST',
- *   body: JSON.stringify({ history, role, focusAreas, resumeContext })
- * }).then(r => r.json()).then(data => data.question);
+ * Generates the next question based on transcript history.
+ * Calls backend if active, otherwise falls back to local client generator.
  */
 export async function generateNextQuestion(
   history: ConversationMessage[],
@@ -205,31 +226,70 @@ export async function generateNextQuestion(
   focusAreas: string[],
   resumeContext?: string
 ): Promise<string> {
+  try {
+    // Format history for backend ChatMessage specifications
+    const formattedHistory = history
+      .filter((m) => m.speaker === 'candidate' || m.speaker === 'assistant')
+      .map((m) => ({
+        speaker: m.speaker,
+        content: m.content,
+      }))
+
+    const response = await fetch(`${BACKEND_URL}/next`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        history: formattedHistory,
+        role,
+        focusAreas,
+        resumeContext,
+      }),
+    })
+
+    if (!response.ok) {
+      throw new Error(`Server returned status: ${response.status}`)
+    }
+
+    const data = await response.json()
+    return data.question
+  } catch (err) {
+    console.warn('[AI Interviewer] Backend next question failed. Falling back to local simulation.', err)
+    return generateNextQuestionFallback(history, role, focusAreas, resumeContext)
+  }
+}
+
+/**
+ * Local fallback question generator (next turn)
+ */
+async function generateNextQuestionFallback(
+  history: ConversationMessage[],
+  role: string,
+  focusAreas: string[],
+  resumeContext?: string
+): Promise<string> {
   await sleep(1500)
 
-  const candidateMessages = history.filter(m => m.speaker === 'candidate')
+  const candidateMessages = history.filter((m) => m.speaker === 'candidate')
   const turnIndex = candidateMessages.length
 
   if (turnIndex === 0) {
-    return generateInitialQuestion(role, focusAreas, resumeContext)
+    return generateInitialQuestionFallback(role, focusAreas, resumeContext)
   }
 
   const lastAnswerText = candidateMessages[candidateMessages.length - 1]?.content || ''
 
-  // 1. Check if the answer is too short (less than 8 words)
   if (lastAnswerText.split(/\s+/).length < 8) {
     return "Thank you. Could you expand on that answer a bit? I'd like to hear more details about your specific approach or any concrete examples from your past projects."
   }
 
-  // 2. Adaptive Question Selection based on Turn index
-  // Turn 1: Follow-up on the first question
   if (turnIndex === 1) {
     const topic = focusAreas[0] || 'your experience'
     const keyword = extractKeyword(lastAnswerText) || topic
     return `That makes sense. Drilling down into what you said about "${keyword}", what are the main edge cases or performance bottlenecks you would watch out for in a production environment?`
   }
 
-  // Turn 2: Question from the second focus area
   if (turnIndex === 2 && focusAreas.length > 1) {
     const secondArea = focusAreas[1]
     const pool = TECHNICAL_QUESTIONS[role]?.[secondArea]
@@ -239,7 +299,6 @@ export async function generateNextQuestion(
     }
   }
 
-  // Turn 3: Question from the third focus area or a scenario question
   if (turnIndex === 3) {
     if (focusAreas.length > 2) {
       const thirdArea = focusAreas[2]
@@ -249,29 +308,64 @@ export async function generateNextQuestion(
         return `Interesting points. Let's move on to ${thirdArea}. ${q}`
       }
     }
-    // Fallback scenario question
     return "Great. Let's talk about testing and deployment. How do you ensure your code is thoroughly tested and verified before releasing it to users?"
   }
 
-  // Turn 4: Behavioral question
   if (turnIndex === 4) {
     const q = BEHAVIORAL_QUESTIONS[Math.floor(Math.random() * BEHAVIORAL_QUESTIONS.length)]
     return `Excellent response. Now let's focus on a behavioral scenario. ${q}`
   }
 
-  // Turn 5+: HR/Closing
   return "Thank you for sharing that. It has been a pleasure talking with you today. That concludes the structured portion of our mock interview. Do you have any final questions for me, or is there anything else you'd like to highlight about your background before we finish?"
 }
 
 /**
- * Synthesizes an evaluation score and report based on the candidate's transcript.
- * FUTURE ACTION: Swap this with a backend request, e.g.
- * return fetch('/api/interview/evaluate', {
- *   method: 'POST',
- *   body: JSON.stringify({ history, role, focusAreas })
- * }).then(r => r.json());
+ * Synthesizes evaluation and score reports.
+ * Calls backend if active, otherwise falls back to local generator.
  */
 export async function generateEvaluation(
+  history: ConversationMessage[],
+  role: string,
+  focusAreas: string[],
+  resumeContext?: string
+): Promise<AIEvaluationResult> {
+  try {
+    const formattedHistory = history
+      .filter((m) => m.speaker === 'candidate' || m.speaker === 'assistant')
+      .map((m) => ({
+        speaker: m.speaker,
+        content: m.content,
+      }))
+
+    const response = await fetch(`${BACKEND_URL}/evaluate`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        history: formattedHistory,
+        role,
+        focusAreas,
+        resumeContext,
+      }),
+    })
+
+    if (!response.ok) {
+      throw new Error(`Server returned status: ${response.status}`)
+    }
+
+    const data = await response.json()
+    return data
+  } catch (err) {
+    console.warn('[AI Interviewer] Backend evaluation failed. Falling back to local scoring simulation.', err)
+    return generateEvaluationFallback(history, role, focusAreas, resumeContext)
+  }
+}
+
+/**
+ * Local fallback evaluation synthesis generator
+ */
+async function generateEvaluationFallback(
   history: ConversationMessage[],
   role: string,
   focusAreas: string[],
@@ -280,17 +374,16 @@ export async function generateEvaluation(
   void resumeContext
   await sleep(2000)
 
-  const candidateMessages = history.filter(m => m.speaker === 'candidate')
+  const candidateMessages = history.filter((m) => m.speaker === 'candidate')
   const answerCount = candidateMessages.length
 
   let totalWords = 0
-  candidateMessages.forEach(m => {
+  candidateMessages.forEach((m) => {
     totalWords += m.content.split(/\s+/).length
   })
 
   const avgLength = answerCount > 0 ? totalWords / answerCount : 0
 
-  // Calculate scores based on length of answers and completeness
   let technicalScore = 7.0
   let communicationScore = 7.5
   let confidenceScore = 7.0
@@ -313,19 +406,17 @@ export async function generateEvaluation(
     confidenceScore = 4.8
   }
 
-  // Inject small randomness for realism
   technicalScore = Math.min(10, Math.max(1, parseFloat((technicalScore + (Math.random() * 0.8 - 0.4)).toFixed(1))))
   communicationScore = Math.min(10, Math.max(1, parseFloat((communicationScore + (Math.random() * 0.8 - 0.4)).toFixed(1))))
   confidenceScore = Math.min(10, Math.max(1, parseFloat((confidenceScore + (Math.random() * 0.8 - 0.4)).toFixed(1))))
 
   const overallScore = parseFloat(((technicalScore + communicationScore + confidenceScore) / 3).toFixed(1))
 
-  // Determine strengths & opportunities based on performance
   const strengths = [
     `Demonstrated clear familiarity with ${role} paradigms.`,
     avgLength > 35 
-      ? "Provided comprehensive answers with practical examples from your previous experience." 
-      : "Able to state technical answers concisely without getting sidetracked."
+      ? 'Provided comprehensive answers with practical examples from your previous experience.' 
+      : 'Able to state technical answers concisely without getting sidetracked.'
   ]
 
   if (focusAreas && focusAreas.length > 0) {
@@ -333,17 +424,17 @@ export async function generateEvaluation(
   }
 
   if (communicationScore >= 7.5) {
-    strengths.push("Exhibited solid communication skills, explaining technical concepts in a logical sequence.")
+    strengths.push('Exhibited solid communication skills, explaining technical concepts in a logical sequence.')
   }
 
   const opportunities = [
-    "Could incorporate more concrete architectural or design trade-offs in technical answers."
+    'Could incorporate more concrete architectural or design trade-offs in technical answers.'
   ]
 
   if (avgLength < 30) {
-    opportunities.push("Try to elaborate more on your answers, detailing the technology stack and your exact contributions.")
+    opportunities.push('Try to elaborate more on your answers, detailing the technology stack and your exact contributions.')
   } else {
-    opportunities.push("Focus on keeping explanations structured (e.g., using the STAR method for behavioral questions).")
+    opportunities.push('Focus on keeping explanations structured (e.g., using the STAR method for behavioral questions).')
   }
 
   if (focusAreas && focusAreas.length > 1) {
@@ -352,14 +443,12 @@ export async function generateEvaluation(
 
   const followUpThemes = [
     `Advanced system architectural patterns in ${role} applications.`,
-    "Real-world scale and optimization case studies.",
-    "Behavioral storytelling under pressure."
+    'Real-world scale and optimization case studies.',
+    'Behavioral storytelling under pressure.'
   ]
 
-  // Map each turn to a Response object
   const responses: Response[] = []
   candidateMessages.forEach((candidateMsg, index) => {
-
     let turnScore = Math.min(10, Math.round(overallScore + (Math.random() * 2 - 1)))
     if (candidateMsg.content.split(/\s+/).length < 15) {
       turnScore = Math.max(3, turnScore - 2)
@@ -371,14 +460,14 @@ export async function generateEvaluation(
       questionId: `q-${index}`,
       answerText: candidateMsg.content,
       score: turnScore,
-      feedback: `This response covers the core elements. ${candidateMsg.content.split(/\s+/).length < 25 ? "It is somewhat brief; consider expanding on the implementation details and your decision-making." : "It demonstrates clean logical structuring and vocabulary."}`,
+      feedback: `This response covers the core elements. ${candidateMsg.content.split(/\s+/).length < 25 ? 'It is somewhat brief; consider expanding on the implementation details and your decision-making.' : 'It demonstrates clean logical structuring and vocabulary.'}`,
       goodPoints: [
-        "Directly addresses the question.",
-        "Uses appropriate technical terms."
+        'Directly addresses the question.',
+        'Uses appropriate technical terms.'
       ],
       improvements: [
-        "Provide a concrete project example.",
-        "Mention the trade-offs of the technology choices."
+        'Provide a concrete project example.',
+        'Mention the trade-offs of the technology choices.'
       ]
     })
   })
@@ -392,9 +481,9 @@ export async function generateEvaluation(
     confidence: 85,
     overallScore,
     dimensions: [
-      { dimension: "Technical Knowledge", score: technicalScore },
-      { dimension: "Communication", score: communicationScore },
-      { dimension: "Confidence", score: confidenceScore }
+      { dimension: 'Technical Knowledge', score: technicalScore },
+      { dimension: 'Communication', score: communicationScore },
+      { dimension: 'Confidence', score: confidenceScore }
     ],
     responses
   }
