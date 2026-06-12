@@ -9,6 +9,12 @@ import {
   RotateCcw,
   Sparkles,
   Volume2,
+  Video,
+  VideoOff,
+  MessageSquare,
+  AlertCircle,
+  Play,
+  LogOut
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { Badge } from '../components/ui/Badge'
@@ -29,6 +35,11 @@ import type {
   InterviewPhase,
   SessionMetadata,
 } from '../types'
+import {
+  generateInitialQuestion,
+  generateNextQuestion,
+  generateEvaluation
+} from '../utils/interviewEngine'
 
 type InterviewDuration = (typeof INTERVIEW_DURATION_OPTIONS)[number]
 type AnswerMode = 'text' | 'voice'
@@ -98,26 +109,9 @@ function formatTime(seconds: number) {
   return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`
 }
 
-function formatTimestamp(value: string) {
-  return new Date(value).toLocaleTimeString([], {
-    hour: 'numeric',
-    minute: '2-digit',
-  })
-}
 
 function getContextChips(role: string) {
   return ROLE_CONTEXT_OPTIONS[role] ?? []
-}
-
-function createSystemMessage(sessionId: string, content: string): ConversationMessage {
-  return {
-    id: crypto.randomUUID(),
-    sessionId,
-    speaker: 'system',
-    content,
-    createdAt: new Date().toISOString(),
-    source: 'system',
-  }
 }
 
 function joinTranscript(responses: CandidateResponse[]) {
@@ -151,6 +145,29 @@ function supportsSpeechRecognition(windowObject: Window) {
   return Boolean(support.SpeechRecognition || support.webkitSpeechRecognition)
 }
 
+function AudioVisualizer({ isActive, color = 'bg-primary' }: { isActive: boolean; color?: string }) {
+  const bars = Array.from({ length: 15 })
+  const delays = ['0.1s', '0.4s', '0.2s', '0.6s', '0.3s', '0.5s', '0.8s', '0.2s', '0.7s', '0.4s', '0.1s', '0.3s', '0.5s', '0.2s', '0.6s']
+
+  return (
+    <div className="flex h-8 items-center justify-center gap-1 bg-gray-50 dark:bg-gray-950 px-4 py-1.5 rounded-full">
+      {bars.map((_, i) => (
+        <span
+          key={i}
+          className={cn(
+            'w-1 rounded-full transition-all duration-300',
+            isActive ? `${color} animate-audio-wave` : 'h-1 bg-gray-300 dark:bg-gray-700',
+          )}
+          style={{
+            animationDelay: isActive ? delays[i] : '0s',
+            height: isActive ? undefined : '4px',
+          }}
+        />
+      ))}
+    </div>
+  )
+}
+
 export function InterviewSession() {
   const navigate = useNavigate()
   const { user } = useAuth()
@@ -164,6 +181,11 @@ export function InterviewSession() {
   const sessionTimerRef = useRef<number | null>(null)
   const spokenAssistantIdsRef = useRef(new Set<string>())
   const synthRef = useRef<SpeechSynthesisUtterance | null>(null)
+
+  // Camera permissions and stream refs
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const [cameraEnabled, setCameraEnabled] = useState(true)
 
   const [phase, setPhase] = useState<InterviewPhase>('config')
   const [config, setConfig] = useState<SessionConfig>({
@@ -186,6 +208,7 @@ export function InterviewSession() {
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([])
   const [selectedVoiceIndex, setSelectedVoiceIndex] = useState(0)
   const [speechSupported, setSpeechSupported] = useState(true)
+  const [showHistory, setShowHistory] = useState(false)
 
   const sessionDurationSeconds = config.durationMinutes * 60
   const currentContextChips = useMemo(
@@ -194,6 +217,14 @@ export function InterviewSession() {
   )
   const liveTranscript = config.answerMode === 'voice' ? currentTranscript : currentDraft
   const conversationTurnCount = candidateResponses.length + aiResponses.length
+
+  // Derived AI state for audio/glow visualizations
+  const aiState: 'idle' | 'speaking' | 'listening' | 'thinking' = useMemo(() => {
+    if (isAwaitingAI) return 'thinking'
+    if (isSpeaking) return 'speaking'
+    if (isListening) return 'listening'
+    return 'idle'
+  }, [isAwaitingAI, isSpeaking, isListening])
 
   const stopListening = useCallback(() => {
     isManualStopRef.current = true
@@ -290,15 +321,53 @@ export function InterviewSession() {
         silenceDetected,
       }
 
-      setMessages((current) => [...current, message])
+      const nextMessages = [...messages, message]
+      setMessages(nextMessages)
       setCandidateResponses((current) => [...current, response])
       setCurrentTranscript('')
       setCurrentDraft('')
       draftStartedAtRef.current = null
       setIsAwaitingAI(true)
+
+      // Fetch next question asynchronously from client-side AI mock engine
+      try {
+        const nextQuestion = await generateNextQuestion(
+          nextMessages,
+          config.jobRole,
+          config.techStacks,
+          config.resumeContext
+        )
+
+        const assistantMsgId = crypto.randomUUID()
+        const assistantMsg: ConversationMessage = {
+          id: assistantMsgId,
+          sessionId,
+          speaker: 'assistant',
+          content: nextQuestion,
+          createdAt: new Date().toISOString(),
+          source: 'backend',
+        }
+
+        const aiResponse: AIResponse = {
+          id: crypto.randomUUID(),
+          sessionId,
+          messageId: assistantMsgId,
+          content: nextQuestion,
+          createdAt: assistantMsg.createdAt,
+          source: 'backend',
+        }
+
+        setMessages((current) => [...current, assistantMsg])
+        setAiResponses((current) => [...current, aiResponse])
+        setIsAwaitingAI(false)
+      } catch (err) {
+        console.error('Error generating next question:', err)
+        setIsAwaitingAI(false)
+      }
+
       return true
     },
-    [cancelSpeech, config.answerMode, liveTranscript, sessionId, stopListening],
+    [cancelSpeech, config.answerMode, liveTranscript, sessionId, stopListening, messages, config.jobRole, config.techStacks, config.resumeContext],
   )
 
   const startListening = useCallback(() => {
@@ -392,6 +461,23 @@ export function InterviewSession() {
     stopListening()
 
     const completedAt = new Date().toISOString()
+    
+    // Set UI to Awaiting AI state to display evaluation generator progress
+    setIsAwaitingAI(true)
+    let evaluationResult = undefined
+
+    try {
+      evaluationResult = await generateEvaluation(
+        messages,
+        config.jobRole,
+        config.techStacks,
+        config.resumeContext
+      )
+    } catch (err) {
+      console.error('Error generating evaluation:', err)
+    }
+    setIsAwaitingAI(false)
+
     const archive: InterviewArchive = {
       sessionId,
       metadata: {
@@ -410,9 +496,16 @@ export function InterviewSession() {
       aiResponses,
       completedAt,
       transcript: joinTranscript(candidateResponses),
+      evaluation: evaluationResult,
     }
 
+    // Save completed archive in localStorage
+    const savedSessions = localStorage.getItem('userSessions')
+    const sessionList = savedSessions ? JSON.parse(savedSessions) : []
+    sessionList.unshift(archive)
+    localStorage.setItem('userSessions', JSON.stringify(sessionList))
     localStorage.setItem('lastSession', JSON.stringify(archive))
+
     setPhase('complete')
     navigate(`/interview/${sessionId}/result`)
   }, [
@@ -427,6 +520,36 @@ export function InterviewSession() {
     user?.fullName,
     user?.id,
   ])
+
+  // Camera stream control effect
+  useEffect(() => {
+    if (phase === 'live' && cameraEnabled) {
+      navigator.mediaDevices
+        .getUserMedia({ video: true, audio: false })
+        .then((stream) => {
+          if (videoRef.current) {
+            videoRef.current.srcObject = stream
+          }
+          streamRef.current = stream
+        })
+        .catch((err) => {
+          console.error('Webcam stream error:', err)
+          setCameraEnabled(false)
+        })
+    } else {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop())
+        streamRef.current = null
+      }
+    }
+
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop())
+        streamRef.current = null
+      }
+    }
+  }, [phase, cameraEnabled])
 
   useEffect(() => {
     const loadVoices = () => {
@@ -566,29 +689,11 @@ export function InterviewSession() {
     })
   }
 
-  const startSession = () => {
+  const startSession = async () => {
     const nextSessionId = crypto.randomUUID()
-    const startedAt = new Date().toISOString()
-    const metadata = buildMetadata(
-      nextSessionId,
-      user?.id ?? 'anonymous',
-      user?.fullName ?? 'Candidate',
-      config,
-      startedAt,
-    )
-
-    const introMessage = createSystemMessage(
-      nextSessionId,
-      `Session prepared for ${config.jobRole}. This browser layer captures speech and text while a real AI interviewer stream can be plugged in later.`,
-    )
-
-    const contextMessage = createSystemMessage(
-      nextSessionId,
-      `Context loaded: ${metadata.jobRole}${metadata.techStacks.length > 0 ? ` - ${metadata.techStacks.join(', ')}` : ''}.`,
-    )
-
+    
     setSessionId(nextSessionId)
-    setMessages([introMessage, contextMessage])
+    setMessages([])
     setCandidateResponses([])
     setAiResponses([])
     setCurrentTranscript('')
@@ -597,6 +702,40 @@ export function InterviewSession() {
     setIsAwaitingAI(true)
     setRemainingSeconds(config.durationMinutes * 60)
     setPhase('live')
+
+    try {
+      const initialQuestionText = await generateInitialQuestion(
+        config.jobRole,
+        config.techStacks,
+        config.resumeContext
+      )
+
+      const introMsgId = crypto.randomUUID()
+      const introMessage: ConversationMessage = {
+        id: introMsgId,
+        sessionId: nextSessionId,
+        speaker: 'assistant',
+        content: initialQuestionText,
+        createdAt: new Date().toISOString(),
+        source: 'backend',
+      }
+
+      const aiResponse: AIResponse = {
+        id: crypto.randomUUID(),
+        sessionId: nextSessionId,
+        messageId: introMsgId,
+        content: initialQuestionText,
+        createdAt: introMessage.createdAt,
+        source: 'backend',
+      }
+
+      setMessages([introMessage])
+      setAiResponses([aiResponse])
+      setIsAwaitingAI(false)
+    } catch (err) {
+      console.error('Error initiating session question:', err)
+      setIsAwaitingAI(false)
+    }
   }
 
   const resetSession = () => {
@@ -649,29 +788,29 @@ export function InterviewSession() {
   if (phase === 'config') {
     return (
       <div className="mx-auto flex min-h-[calc(100vh-120px)] max-w-3xl items-center justify-center px-4 py-8">
-        <Card className="w-full space-y-8 p-8">
+        <Card className="w-full space-y-8 p-8 border border-gray-100 shadow-xl dark:border-gray-800">
           <div className="text-center">
-            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-primary">
+            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-primary animate-pulse">
               <Sparkles className="h-6 w-6" />
             </div>
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+            <h1 className="text-3xl font-extrabold text-gray-900 dark:text-gray-100 tracking-tight">
               Configure Your AI Interview
             </h1>
-            <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
-              This session records a natural conversation flow and is ready for real Gemini/OpenAI turn streaming.
+            <p className="mt-2 text-sm text-gray-500 dark:text-gray-400 max-w-md mx-auto">
+              Choose your role, focus tags, and answer mode. Emma, your AI Coach, will ask customized questions based on your selections.
             </p>
           </div>
 
-          <div className="grid gap-5">
+          <div className="grid gap-6">
             <div>
-              <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                Job Role
+              <label className="mb-2 block text-sm font-semibold text-gray-700 dark:text-gray-300">
+                Target Job Role
               </label>
               <select
                 value={config.jobRole}
                 onChange={(event) => handleRoleChange(event.target.value)}
                 className={cn(
-                  'w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm transition focus:outline-none focus:ring-2 focus:ring-primary dark:border-gray-600 dark:bg-gray-800',
+                  'w-full rounded-xl border border-gray-300 bg-white px-4 py-3 text-sm shadow-sm transition focus:outline-none focus:ring-2 focus:ring-primary dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100',
                 )}
               >
                 {JOB_ROLES.map((role) => (
@@ -683,10 +822,10 @@ export function InterviewSession() {
             </div>
 
             <div>
-              <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                Focus Areas
+              <label className="mb-2 block text-sm font-semibold text-gray-700 dark:text-gray-300">
+                Focus Areas / Tech Stacks
               </label>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-2.5">
                 {currentContextChips.map((stack) => {
                   const selected = config.techStacks.includes(stack)
                   return (
@@ -695,10 +834,10 @@ export function InterviewSession() {
                       type="button"
                       onClick={() => handleTechStackToggle(stack)}
                       className={cn(
-                        'rounded-full border px-3 py-1.5 text-sm transition',
+                        'rounded-full border px-4 py-2 text-sm font-medium transition duration-200',
                         selected
-                          ? 'border-primary bg-primary text-white'
-                          : 'border-gray-300 text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800',
+                          ? 'border-primary bg-primary text-white shadow-md shadow-primary/20 scale-[1.03]'
+                          : 'border-gray-300 text-gray-700 bg-white hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700',
                       )}
                     >
                       {stack}
@@ -707,58 +846,85 @@ export function InterviewSession() {
                 })}
               </div>
               <p className="mt-2 text-xs text-gray-400">
-                These context chips are passed forward for the backend AI interviewer.
+                Emma will tailor questions specifically targeting these concepts.
               </p>
             </div>
 
-            <div>
-              <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                Interview Length
-              </label>
-              <div className="grid grid-cols-2 gap-3">
-                {INTERVIEW_DURATION_OPTIONS.map((minutes) => {
-                  const selected = config.durationMinutes === minutes
-                  return (
-                    <button
-                      key={minutes}
-                      type="button"
-                      onClick={() =>
-                        setConfig((current) => ({
-                          ...current,
-                          durationMinutes: minutes,
-                        }))
-                      }
-                      className={cn(
-                        'rounded-lg border px-4 py-2 text-sm font-medium transition',
-                        selected
-                          ? 'border-primary bg-primary text-white'
-                          : 'border-gray-300 text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800',
-                      )}
-                    >
-                      {formatDuration(minutes)}
-                    </button>
-                  )
-                })}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="mb-2 block text-sm font-semibold text-gray-700 dark:text-gray-300">
+                  Interview Length
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  {INTERVIEW_DURATION_OPTIONS.map((minutes) => {
+                    const selected = config.durationMinutes === minutes
+                    return (
+                      <button
+                        key={minutes}
+                        type="button"
+                        onClick={() =>
+                          setConfig((current) => ({
+                            ...current,
+                            durationMinutes: minutes,
+                          }))
+                        }
+                        className={cn(
+                          'rounded-xl border py-2.5 text-sm font-semibold transition duration-200',
+                          selected
+                            ? 'border-primary bg-primary text-white shadow-md shadow-primary/25'
+                            : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700',
+                        )}
+                      >
+                        {formatDuration(minutes)}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm font-semibold text-gray-700 dark:text-gray-300">
+                  Interviewer Voice
+                </label>
+                {availableVoices.length > 0 ? (
+                  <select
+                    value={selectedVoiceIndex}
+                    onChange={(event) => setSelectedVoiceIndex(Number(event.target.value))}
+                    className={cn(
+                      'w-full rounded-xl border border-gray-300 bg-white px-4 py-3 text-sm shadow-sm transition focus:outline-none focus:ring-2 focus:ring-primary dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100',
+                    )}
+                  >
+                    {availableVoices.map((voice, index) => (
+                      <option key={`${voice.name}-${index}`} value={index}>
+                        {voice.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-3 text-xs text-gray-400 dark:border-gray-700 dark:bg-gray-900">
+                    System synthesizer loading...
+                  </div>
+                )}
               </div>
             </div>
 
             <div>
-              <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+              <label className="mb-2 block text-sm font-semibold text-gray-700 dark:text-gray-300">
                 Answer Mode
               </label>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 {[
                   {
                     key: 'voice',
-                    title: 'Voice Mode',
-                    description: 'Answer with live speech and transcript capture',
+                    title: 'Voice Mode (Recommended)',
+                    description: 'Speak your answers out loud. Captures real-time transcript.',
                     icon: Mic,
                   },
                   {
                     key: 'text',
                     title: 'Text Mode',
-                    description: 'Type your answers when voice is unavailable',
-                    icon: Bot,
+                    description: 'Type your responses inside a text editor.',
+                    icon: MessageSquare,
                   },
                 ].map((mode) => {
                   const Icon = mode.icon
@@ -775,21 +941,21 @@ export function InterviewSession() {
                         }))
                       }
                       className={cn(
-                        'rounded-2xl p-4 text-left transition',
+                        'rounded-2xl p-5 text-left border transition-all duration-200',
                         selected
-                          ? 'border-2 border-primary bg-primary/5'
-                          : 'border border-gray-200 dark:border-gray-700',
+                          ? 'border-2 border-primary bg-primary/5 shadow-md scale-[1.02]'
+                          : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-850',
                       )}
                     >
-                      <div className="flex items-center gap-3">
-                        <div className="flex h-11 w-11 items-center justify-center rounded-full bg-gray-100 text-primary dark:bg-gray-800">
+                      <div className="flex gap-4">
+                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
                           <Icon className="h-5 w-5" />
                         </div>
                         <div>
-                          <p className="font-medium text-gray-900 dark:text-gray-100">
+                          <p className="font-semibold text-gray-900 dark:text-gray-100">
                             {mode.title}
                           </p>
-                          <p className="text-sm text-gray-500 dark:text-gray-400">
+                          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                             {mode.description}
                           </p>
                         </div>
@@ -801,8 +967,8 @@ export function InterviewSession() {
             </div>
 
             <div>
-              <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                Resume / Interview Context
+              <label className="mb-2 block text-sm font-semibold text-gray-700 dark:text-gray-300">
+                Resume Context / Notes
               </label>
               <textarea
                 value={config.resumeContext}
@@ -812,37 +978,17 @@ export function InterviewSession() {
                     resumeContext: event.target.value,
                   }))
                 }
-                rows={4}
-                placeholder="Paste a short resume summary, role context, or notes the AI interviewer should consider later."
+                rows={3}
+                placeholder="Paste summary points from your resume or job descriptions to customize Emma's focus."
                 className={cn(
-                  'min-h-28 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm transition focus:outline-none focus:ring-2 focus:ring-primary dark:border-gray-600 dark:bg-gray-800',
+                  'w-full rounded-xl border border-gray-300 bg-white px-4 py-3 text-sm shadow-sm transition focus:outline-none focus:ring-2 focus:ring-primary dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100',
                 )}
               />
             </div>
 
-            {availableVoices.length > 0 ? (
-              <div>
-                <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                  Interviewer Voice
-                </label>
-                <select
-                  value={selectedVoiceIndex}
-                  onChange={(event) => setSelectedVoiceIndex(Number(event.target.value))}
-                  className={cn(
-                    'w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm transition focus:outline-none focus:ring-2 focus:ring-primary dark:border-gray-600 dark:bg-gray-800',
-                  )}
-                >
-                  {availableVoices.map((voice, index) => (
-                    <option key={`${voice.name}-${index}`} value={index}>
-                      {voice.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            ) : null}
-
-            <Button type="button" size="lg" className="w-full" onClick={startSession}>
-              Start Interview
+            <Button type="button" size="lg" className="w-full mt-2 font-bold py-3.5 shadow-lg shadow-primary/30" onClick={startSession}>
+              <Play className="h-5 w-5 fill-current" />
+              Begin AI Interview
             </Button>
           </div>
         </Card>
@@ -853,40 +999,42 @@ export function InterviewSession() {
   if (phase === 'complete') {
     return (
       <div className="mx-auto flex min-h-[calc(100vh-120px)] max-w-md items-center justify-center px-4 py-8">
-        <Card className="w-full text-center">
-          <CheckCircle className="mx-auto h-16 w-16 text-success" />
-          <h1 className="mt-4 text-2xl font-bold text-gray-900 dark:text-gray-100">
-            Interview Complete
+        <Card className="w-full text-center p-8 border border-gray-100 shadow-xl dark:border-gray-800">
+          <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-success/10 text-success mb-6">
+            <CheckCircle className="h-10 w-10" />
+          </div>
+          <h1 className="text-3xl font-extrabold text-gray-900 dark:text-gray-100 tracking-tight">
+            Interview Finished!
           </h1>
           <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
-            Your session has been saved as a conversational transcript for the backend AI evaluator.
+            Great job! Emma is synthesizing your evaluation report based on your responses.
           </p>
 
-          <div className="mt-6 grid grid-cols-3 gap-3 text-sm">
-            <div className="rounded-xl bg-gray-50 p-3 dark:bg-gray-800">
-              <p className="text-gray-500 dark:text-gray-400">Turns</p>
-              <p className="mt-1 font-semibold text-gray-900 dark:text-gray-100">
+          <div className="mt-8 grid grid-cols-3 gap-3 text-sm bg-gray-50 dark:bg-gray-900 p-4 rounded-2xl">
+            <div>
+              <p className="text-xs text-gray-500 dark:text-gray-400">Turns</p>
+              <p className="mt-1 font-bold text-lg text-gray-900 dark:text-gray-100">
                 {conversationTurnCount}
               </p>
             </div>
-            <div className="rounded-xl bg-gray-50 p-3 dark:bg-gray-800">
-              <p className="text-gray-500 dark:text-gray-400">Mode</p>
-              <p className="mt-1 font-semibold text-gray-900 dark:text-gray-100">
-                {config.answerMode.toUpperCase()}
+            <div>
+              <p className="text-xs text-gray-500 dark:text-gray-400">Mode</p>
+              <p className="mt-1 font-bold text-lg text-gray-900 dark:text-gray-100 capitalize">
+                {config.answerMode}
               </p>
             </div>
-            <div className="rounded-xl bg-gray-50 p-3 dark:bg-gray-800">
-              <p className="text-gray-500 dark:text-gray-400">Status</p>
-              <p className="mt-1 font-semibold text-gray-900 dark:text-gray-100">Saved</p>
+            <div>
+              <p className="text-xs text-gray-500 dark:text-gray-400">Evaluation</p>
+              <p className="mt-1 font-bold text-lg text-success">Ready</p>
             </div>
           </div>
 
-          <div className="mt-6 flex flex-col gap-3 sm:flex-row">
-            <Button type="button" className="w-full" onClick={() => navigate(`/interview/${sessionId}/result`)}>
-              View Review
+          <div className="mt-8 flex flex-col gap-3">
+            <Button type="button" className="w-full font-bold py-3" onClick={() => navigate(`/interview/${sessionId}/result`)}>
+              View Detailed Scorecard
             </Button>
-            <Button type="button" variant="secondary" className="w-full" onClick={resetSession}>
-              Start Again
+            <Button type="button" variant="secondary" className="w-full font-bold py-3" onClick={resetSession}>
+              Start A New Session
             </Button>
           </div>
         </Card>
@@ -897,169 +1045,239 @@ export function InterviewSession() {
   const isVoiceMode = config.answerMode === 'voice'
   const canUseMic = isVoiceMode && speechSupported && !isSpeaking
 
+  // Find the current active question to display prominently
+  const activeQuestion = [...messages]
+    .reverse()
+    .find((m) => m.speaker === 'assistant')?.content || 'Preparing your interview setup...'
+
   return (
-    <div className="space-y-6">
-      <div className="h-1.5 rounded bg-gray-200 dark:bg-gray-700">
+    <div className="space-y-6 max-w-7xl mx-auto px-4 py-4">
+      {/* Top progress and action bar */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white/60 dark:bg-gray-900/60 backdrop-blur-md p-4 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm">
+        <div className="flex flex-wrap items-center gap-3">
+          <Badge label={config.jobRole} variant="info" />
+          <Badge label={isVoiceMode ? 'Voice Mode' : 'Text Mode'} variant="default" />
+          <div className="h-4 w-px bg-gray-200 dark:bg-gray-700" />
+          <div className="flex items-center gap-1.5 text-xs text-gray-500">
+            <Clock className="h-4 w-4 text-primary" />
+            <span>Time remaining:</span>
+            <span className={cn('font-bold', remainingSeconds < 90 ? 'text-danger animate-pulse' : 'text-gray-900 dark:text-gray-100')}>
+              {formatTime(remainingSeconds)}
+            </span>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <Button type="button" variant="ghost" size="sm" onClick={() => setShowHistory(!showHistory)}>
+            <MessageSquare className="h-4 w-4" />
+            {showHistory ? 'Hide Transcript' : 'Show Transcript'}
+          </Button>
+          <Button type="button" variant="danger" size="sm" onClick={finishSessionNow}>
+            <LogOut className="h-4 w-4" />
+            End Session
+          </Button>
+        </div>
+      </div>
+
+      {/* Progress Bar */}
+      <div className="h-1.5 w-full bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">
         <div
-          className="h-1.5 rounded bg-primary transition-all duration-300"
+          className="h-full bg-primary transition-all duration-500 ease-out"
           style={{
             width: `${((sessionDurationSeconds - remainingSeconds) / sessionDurationSeconds) * 100}%`,
           }}
         />
       </div>
 
-      <div className="flex flex-col gap-3 rounded-xl bg-white p-4 shadow-sm dark:bg-gray-900 md:flex-row md:items-center md:justify-between">
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge label={config.jobRole} variant="info" />
-          <Badge label={formatDuration(config.durationMinutes)} variant="warning" />
-          <Badge label={isVoiceMode ? 'Voice' : 'Text'} variant="default" />
-          <Badge
-            label={speechSupported ? 'Speech ready' : 'Speech unsupported'}
-            variant={speechSupported ? 'success' : 'danger'}
-          />
-        </div>
-
-        <div className="flex flex-col items-center gap-1">
-          <p className="font-semibold text-gray-900 dark:text-gray-100">
-            {isAwaitingAI ? 'Waiting for AI interviewer response' : 'Conversation in progress'}
-          </p>
-          <div className="flex items-center gap-2 text-xs text-gray-400">
-            <Sparkles className="h-4 w-4" />
-            Browser voice and transcript capture are active
-          </div>
-        </div>
-
-        <div
-          className={cn(
-            'flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300',
-            remainingSeconds < 60 ? 'font-bold text-danger animate-pulse' : null,
-          )}
-        >
-          <Clock className="h-4 w-4" />
-          {formatTime(remainingSeconds)}
-        </div>
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.9fr)]">
-        <Card className="space-y-5">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-sm font-semibold text-primary">Conversation</p>
-              <h2 className="mt-1 text-xl font-semibold text-gray-900 dark:text-gray-100">
-                AI interviewer conversation feed
-              </h2>
-            </div>
-            <button
-              type="button"
-              onClick={() => speakText(messages[0]?.content ?? '')}
-              className="rounded-lg p-2 text-gray-500 transition hover:bg-gray-100 hover:text-primary dark:hover:bg-gray-800"
-              aria-label="Replay session intro"
-              title="Replay session intro"
-            >
-              <Volume2 className="h-5 w-5" />
-            </button>
-          </div>
-
-          <div className="space-y-3 rounded-2xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-950">
-            {messages.length > 0 ? (
-              messages.map((message) => {
-                const isCandidate = message.speaker === 'candidate'
-                const isAssistant = message.speaker === 'assistant'
-
-                return (
-                  <div key={message.id} className={cn('flex', isCandidate ? 'justify-end' : 'justify-start')}>
-                    <div
-                      className={cn(
-                        'max-w-[85%] rounded-2xl px-4 py-3 text-sm shadow-sm',
-                        isCandidate
-                          ? 'bg-primary text-white'
-                          : isAssistant
-                            ? 'border border-indigo-100 bg-white text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100'
-                            : 'bg-transparent text-gray-500',
-                      )}
-                    >
-                      <div className="mb-1 flex items-center gap-2 text-xs uppercase tracking-wide opacity-80">
-                        {isCandidate ? 'Candidate' : isAssistant ? 'AI interviewer' : 'System'}
-                        <span>-</span>
-                        <span>{formatTimestamp(message.createdAt)}</span>
-                      </div>
-                      <p className={cn(message.speaker === 'system' ? 'text-gray-500' : null)}>
-                        {message.content}
-                      </p>
-                    </div>
-                  </div>
-                )
-              })
-            ) : (
-              <div className="rounded-2xl border border-dashed border-gray-300 p-8 text-center text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400">
-                The conversation feed will fill here as the interview starts.
-              </div>
-            )}
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2 text-xs text-gray-400">
-            <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-1 dark:bg-gray-800">
-              <Sparkles className="h-3.5 w-3.5" />
-              Backend-ready turn stream
-            </span>
-            <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-1 dark:bg-gray-800">
-              <Bot className="h-3.5 w-3.5" />
-              Assistant messages will auto-speak later
-            </span>
-          </div>
-        </Card>
-
+      {/* Main Grid: Left Video streams, Right Answer capturing */}
+      <div className="grid gap-6 lg:grid-cols-[380px_1fr]">
+        
+        {/* Left Column: Avatars/Video Stream Cards */}
         <div className="space-y-6">
-          <Card className="space-y-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-semibold text-primary">Live Capture</p>
-                <h3 className="mt-1 text-lg font-semibold text-gray-900 dark:text-gray-100">
-                  Voice or text answer entry
-                </h3>
-              </div>
-              <Badge
-                label={isListening ? 'Listening' : isAwaitingAI ? 'Awaiting turn' : 'Ready'}
-                variant={isListening ? 'success' : isAwaitingAI ? 'warning' : 'default'}
+          
+          {/* AI Interviewer Emma Box */}
+          <Card className={cn(
+            'flex flex-col items-center justify-center p-6 text-center border-2 transition-all duration-300 shadow-lg relative overflow-hidden',
+            aiState === 'speaking' && 'animate-glow-primary border-primary/40',
+            aiState === 'listening' && 'animate-glow-success border-success/40',
+            aiState === 'thinking' && 'animate-glow-accent border-accent/40',
+            aiState === 'idle' && 'border-gray-200 dark:border-gray-700'
+          )}>
+            {/* Status indicator pill in top-right */}
+            <div className="absolute top-4 right-4">
+              <span className={cn(
+                'inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide',
+                aiState === 'speaking' && 'bg-primary/10 text-primary',
+                aiState === 'listening' && 'bg-success/10 text-success animate-pulse',
+                aiState === 'thinking' && 'bg-accent/10 text-accent',
+                aiState === 'idle' && 'bg-gray-100 text-gray-500 dark:bg-gray-800'
+              )}>
+                {aiState}
+              </span>
+            </div>
+
+            {/* Emma Circular Avatar with state glows */}
+            <div className="relative mb-4 mt-2">
+              <div className={cn(
+                'absolute inset-0 rounded-full scale-105 border border-dashed opacity-0 transition-all duration-300',
+                aiState === 'speaking' && 'border-primary opacity-60 animate-spin',
+                aiState === 'thinking' && 'border-accent opacity-60 animate-pulse',
+              )} style={{ animationDuration: '6s' }} />
+              <img
+                src="/ai_avatar.png"
+                alt="Emma"
+                className={cn(
+                  'w-24 h-24 rounded-full border-4 object-cover transition-transform duration-300 shadow-md',
+                  aiState === 'speaking' && 'border-primary scale-[1.02]',
+                  aiState === 'listening' && 'border-success',
+                  aiState === 'thinking' && 'border-accent scale-95 opacity-80',
+                  aiState === 'idle' && 'border-gray-200 dark:border-gray-700'
+                )}
+                onError={(e) => {
+                  // Fallback if avatar image is unavailable
+                  ;(e.target as HTMLImageElement).src = 'https://i.pravatar.cc/150?img=32'
+                }}
               />
             </div>
 
-            {config.answerMode === 'voice' ? (
+            <h3 className="font-bold text-gray-900 dark:text-gray-100 flex items-center gap-1.5 justify-center">
+              <Bot className="h-4 w-4 text-primary" />
+              Emma
+            </h3>
+            <p className="text-xs text-gray-400 mt-0.5">AI Interview Coach</p>
+
+            {/* Audio waveforms visualizer */}
+            <div className="w-full mt-5">
+              <AudioVisualizer
+                isActive={aiState === 'speaking' || aiState === 'listening'}
+                color={aiState === 'speaking' ? 'bg-primary' : 'bg-success'}
+              />
+            </div>
+
+            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mt-4 h-4">
+              {aiState === 'speaking' && 'Emma is asking a question...'}
+              {aiState === 'listening' && 'Listening to your answer...'}
+              {aiState === 'thinking' && 'Processing response...'}
+              {aiState === 'idle' && 'Emma is ready.'}
+            </p>
+          </Card>
+
+          {/* Candidate Webcam Feed Box */}
+          <Card className="p-4 border border-gray-200 dark:border-gray-700 bg-gray-950 shadow-md relative overflow-hidden aspect-[4/3] flex flex-col justify-between">
+            {cameraEnabled ? (
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted
+                className="absolute inset-0 w-full h-full object-cover rounded-xl"
+              />
+            ) : (
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-gray-900 to-gray-950 text-gray-600 dark:text-gray-400">
+                <VideoOff className="h-10 w-10 mb-2 opacity-50" />
+                <p className="text-xs font-medium">Camera Feed Disabled</p>
+              </div>
+            )}
+
+            {/* Status overlay bar */}
+            <div className="relative flex items-center justify-between w-full z-10">
+              <span className="inline-flex items-center gap-1.5 bg-black/60 backdrop-blur-sm px-2.5 py-1 rounded-full text-[10px] font-bold text-white uppercase tracking-wider">
+                <span className="h-2 w-2 rounded-full bg-danger animate-pulse" />
+                {isListening ? 'Capture Active' : 'Idle'}
+              </span>
+              
+              <button
+                type="button"
+                onClick={() => setCameraEnabled(!cameraEnabled)}
+                className="bg-black/60 hover:bg-black/80 backdrop-blur-sm p-1.5 rounded-full text-white transition"
+                title={cameraEnabled ? 'Turn camera off' : 'Turn camera on'}
+              >
+                {cameraEnabled ? <Video className="h-3.5 w-3.5" /> : <VideoOff className="h-3.5 w-3.5 text-danger" />}
+              </button>
+            </div>
+
+            <div className="relative w-full text-left z-10 mt-auto">
+              <span className="bg-black/60 backdrop-blur-sm px-2 py-0.5 rounded text-[11px] font-medium text-white">
+                {user?.fullName || 'Candidate'} (You)
+              </span>
+            </div>
+          </Card>
+        </div>
+
+        {/* Right Column: Active question & transcripts */}
+        <div className="flex flex-col gap-6">
+          
+          {/* Active Question Card */}
+          <Card className="p-6 border border-gray-150 dark:border-gray-850 shadow-md bg-white dark:bg-gray-900 flex-1 flex flex-col justify-center">
+            <div className="flex items-center gap-2 mb-3">
+              <Sparkles className="h-4 w-4 text-primary animate-pulse" />
+              <span className="text-xs font-bold uppercase tracking-wider text-primary">Active Prompt</span>
+            </div>
+            
+            <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100 leading-relaxed">
+              {activeQuestion}
+            </h2>
+
+            {/* Quick replay button if they missed the voice */}
+            <div className="mt-4 flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => speakText(activeQuestion)}
+                disabled={isSpeaking || isAwaitingAI}
+                className="inline-flex items-center gap-1.5 text-xs text-gray-500 hover:text-primary transition disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Volume2 className="h-4 w-4" />
+                <span>Repeat question</span>
+              </button>
+            </div>
+          </Card>
+
+          {/* Capturing Responses Area */}
+          <Card className="p-6 border border-gray-200 dark:border-gray-700 shadow-md">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-gray-900 dark:text-gray-100">
+                {isVoiceMode ? 'Voice Capture' : 'Your Answer'}
+              </h3>
+              <Badge
+                label={aiState === 'listening' ? 'Listening' : aiState === 'thinking' ? 'Emma is thinking' : 'Awaiting prompt'}
+                variant={aiState === 'listening' ? 'success' : aiState === 'thinking' ? 'warning' : 'default'}
+              />
+            </div>
+
+            {isVoiceMode ? (
               <div className="space-y-4">
-                {!speechSupported ? (
-                  <Card className="border border-yellow-200 bg-yellow-50 dark:border-yellow-900 dark:bg-yellow-950/40">
-                    <p className="text-sm text-yellow-800 dark:text-yellow-200">
-                      Voice input is not supported in this browser. Chrome works best for speech recognition.
+                {!speechSupported && (
+                  <Card className="border border-yellow-200 bg-yellow-50/60 p-3 dark:border-yellow-900/50 dark:bg-yellow-950/20">
+                    <p className="text-xs text-yellow-800 dark:text-yellow-200 flex gap-2">
+                      <AlertCircle className="h-4 w-4 shrink-0 text-yellow-600" />
+                      Voice input is not supported in this browser. Chrome works best for speech recognition. Try switching to Text Mode.
                     </p>
                   </Card>
-                ) : null}
+                )}
 
-                <div className="flex flex-col items-center gap-4">
+                <div className="flex flex-col items-center justify-center p-4 bg-gray-50 dark:bg-gray-950 rounded-2xl border border-gray-100 dark:border-gray-800">
                   <button
                     type="button"
                     onClick={toggleListening}
                     disabled={!canUseMic && !isListening}
                     className={cn(
-                      'rounded-full p-6 text-white transition disabled:cursor-not-allowed disabled:opacity-50',
-                      isListening ? 'bg-danger animate-pulse' : 'bg-primary hover:bg-indigo-600',
+                      'rounded-full p-6 text-white transition-all duration-300 disabled:cursor-not-allowed disabled:opacity-30 shadow-lg',
+                      isListening 
+                        ? 'bg-danger hover:bg-rose-600 animate-pulse scale-105 shadow-danger/20' 
+                        : 'bg-primary hover:bg-indigo-600 shadow-primary/20 hover:scale-[1.05]'
                     )}
-                    aria-label="Toggle microphone"
+                    aria-label={isListening ? 'Stop recording and submit' : 'Start microphone'}
                   >
-                    {isListening ? <MicOff className="h-8 w-8" /> : <Mic className="h-8 w-8" />}
+                    {isListening ? <MicOff className="h-7 w-7" /> : <Mic className="h-7 w-7" />}
                   </button>
 
-                  <div className="text-center text-sm text-gray-600 dark:text-gray-300">
-                    {isListening ? (
-                      <div className="flex items-center justify-center gap-2">
-                        <span className="h-3 w-3 animate-pulse rounded-full bg-danger" />
-                        Listening to your answer
-                      </div>
-                    ) : isSpeaking ? (
-                      'Please wait until the interviewer finishes speaking.'
-                    ) : (
-                      'Click the microphone and speak naturally. The transcript updates in real time.'
-                    )}
-                  </div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-4 text-center max-w-sm leading-relaxed">
+                    {isListening 
+                      ? 'Speaking... Silence detection will submit automatically, or click button to finish.' 
+                      : isSpeaking 
+                        ? 'Wait until Emma finishes speaking...' 
+                        : 'Click the microphone button to start recording your response.'}
+                  </p>
                 </div>
               </div>
             ) : (
@@ -1067,86 +1285,89 @@ export function InterviewSession() {
                 <textarea
                   value={currentDraft}
                   onChange={(event) => handleTextChange(event.target.value)}
-                  placeholder="Type naturally. The session will advance once you pause."
-                  className={cn(
-                    'min-h-40 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm transition focus:outline-none focus:ring-2 focus:ring-primary dark:border-gray-600 dark:bg-gray-800',
-                  )}
+                  disabled={isSpeaking || isAwaitingAI}
+                  placeholder="Type your response here..."
+                  className="w-full min-h-32 rounded-xl border border-gray-300 bg-white px-4 py-3 text-sm transition focus:outline-none focus:ring-2 focus:ring-primary dark:border-gray-650 dark:bg-gray-800 dark:text-gray-100 disabled:opacity-50"
                 />
+                
                 <div className="flex items-center justify-between text-xs text-gray-400">
-                  <span>Silence detection will archive the answer automatically.</span>
+                  <span>Press the submit button when finished.</span>
                   <span>{currentDraft.length} characters</span>
+                </div>
+
+                <div className="flex justify-end mt-2">
+                  <Button
+                    type="button"
+                    disabled={!currentDraft.trim() || isSpeaking || isAwaitingAI}
+                    onClick={() => commitDraft(false)}
+                    className="font-semibold px-5"
+                  >
+                    Submit Answer
+                  </Button>
                 </div>
               </div>
             )}
 
-            <div className="space-y-2">
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                Live Transcript
+            {/* Live Transcript Stream */}
+            <div className="mt-5 space-y-2">
+              <label className="block text-xs font-bold uppercase tracking-wider text-gray-400">
+                Live Transcript Feed
               </label>
-              <textarea
-                value={liveTranscript}
-                readOnly
-                placeholder="Transcript appears here as you speak or type..."
-                className={cn(
-                  'min-h-32 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm transition focus:outline-none focus:ring-2 focus:ring-primary dark:border-gray-600 dark:bg-gray-800',
-                )}
-              />
-            </div>
-
-            {isAwaitingAI ? (
-              <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-3 text-sm text-gray-500 dark:border-gray-700 dark:bg-gray-900/60 dark:text-gray-400">
-                The frontend is waiting for a real AI interviewer response stream. Candidate turns are already captured and ready for backend processing.
+              <div className="min-h-16 w-full rounded-xl border border-gray-200 bg-gray-50/50 dark:border-gray-800 dark:bg-gray-950 p-3 text-xs text-gray-600 dark:text-gray-300 italic max-h-24 overflow-y-auto">
+                {liveTranscript || 'Transcript will render here in real-time as you speak...'}
               </div>
-            ) : null}
+            </div>
           </Card>
 
-          <Card className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-semibold text-primary">Session Context</p>
-                <h3 className="mt-1 text-lg font-semibold text-gray-900 dark:text-gray-100">
-                  Metadata prepared for backend AI
-                </h3>
+          {/* History Panel togglable */}
+          {showHistory && (
+            <Card className="p-5 border border-gray-200 dark:border-gray-700 animate-fadeIn">
+              <h3 className="font-bold text-sm text-gray-800 dark:text-gray-200 mb-3 flex items-center gap-1.5">
+                <MessageSquare className="h-4 w-4" />
+                Conversation Log
+              </h3>
+
+              <div className="space-y-3 max-h-60 overflow-y-auto pr-1">
+                {messages.map((message) => {
+                  const isCandidate = message.speaker === 'candidate'
+                  const isAssistant = message.speaker === 'assistant'
+
+                  return (
+                    <div key={message.id} className={cn('flex', isCandidate ? 'justify-end' : 'justify-start')}>
+                      <div
+                        className={cn(
+                          'max-w-[85%] rounded-2xl px-3.5 py-2 text-xs shadow-sm',
+                          isCandidate
+                            ? 'bg-primary text-white'
+                            : isAssistant
+                              ? 'border border-indigo-50 bg-white text-gray-950 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-150'
+                              : 'bg-transparent text-gray-400',
+                        )}
+                      >
+                        <div className="mb-0.5 font-bold opacity-60 text-[9px] uppercase tracking-wider">
+                          {isCandidate ? 'You' : isAssistant ? 'Emma' : 'System'}
+                        </div>
+                        <p>{message.content}</p>
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
-              <Button type="button" variant="secondary" size="sm" onClick={finishSessionNow}>
-                End Session
-              </Button>
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              <Badge label={config.jobRole} variant="info" />
-              <Badge label={config.answerMode.toUpperCase()} variant="default" />
-              <Badge label={formatDuration(config.durationMinutes)} variant="warning" />
-              <Badge label={`${candidateResponses.length} candidate turns`} variant="success" />
-            </div>
-
-            <div className="grid gap-2 text-sm text-gray-600 dark:text-gray-300">
-              <p>
-                <span className="font-medium text-gray-900 dark:text-gray-100">Resume context:</span>{' '}
-                {config.resumeContext.trim() || 'Not provided yet'}
-              </p>
-              <p>
-                <span className="font-medium text-gray-900 dark:text-gray-100">Turn count:</span>{' '}
-                {conversationTurnCount}
-              </p>
-              <p>
-                <span className="font-medium text-gray-900 dark:text-gray-100">Conversation status:</span>{' '}
-                Backend-ready and waiting for streamed AI follow-ups
-              </p>
-            </div>
-          </Card>
+            </Card>
+          )}
         </div>
       </div>
 
-      <div className="flex items-center justify-between text-xs text-gray-400">
-        <span>No submit button. Silence and speech boundaries create candidate turns automatically.</span>
+      {/* Footer Reset controls */}
+      <div className="flex justify-between items-center text-xs text-gray-400 pt-2 border-t border-gray-100 dark:border-gray-800">
+        <span>Silence detection commits voice turns automatically.</span>
         <button
           type="button"
           onClick={resetSession}
-          className="inline-flex items-center gap-1 rounded-full px-2 py-1 transition hover:bg-gray-100 dark:hover:bg-gray-800"
+          className="inline-flex items-center gap-1 rounded-full px-3 py-1 bg-gray-50 hover:bg-gray-100 dark:bg-gray-900 dark:hover:bg-gray-800 transition"
         >
-          <RotateCcw className="h-3.5 w-3.5" />
-          Reset session
+          <RotateCcw className="h-3 w-3" />
+          Reset session config
         </button>
       </div>
     </div>

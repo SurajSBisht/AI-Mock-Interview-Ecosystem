@@ -41,11 +41,28 @@ export function Dashboard() {
   const { user } = useAuth()
   const navigate = useNavigate()
   const [isLoading, setIsLoading] = useState(true)
+  const [sessions, setSessions] = useState<any[]>([])
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
       setIsLoading(false)
     }, 1000)
+
+    const saved = localStorage.getItem('userSessions')
+    const localSessions = saved ? JSON.parse(saved) : []
+    const formattedLocal = localSessions.map((arch: any) => ({
+      id: arch.sessionId,
+      candidateId: arch.metadata.candidateId,
+      jobRole: arch.metadata.jobRole,
+      difficulty: 'Medium',
+      totalQuestions: arch.candidateResponses.length,
+      answerMode: arch.metadata.answerMode,
+      status: arch.metadata.status,
+      overallScore: arch.evaluation?.overallScore,
+      createdAt: arch.metadata.createdAt || arch.completedAt,
+    }))
+
+    setSessions([...formattedLocal, ...mockSessions])
 
     return () => window.clearTimeout(timeoutId)
   }, [])
@@ -75,10 +92,20 @@ export function Dashboard() {
   const firstName =
     user.fullName.split(' ').find((part) => part.length > 0) ?? mockUser.fullName
 
+  const completedSessions = sessions.filter(s => s.status === 'completed')
+  const completedCount = completedSessions.length
+  
+  const scoredSessions = sessions.filter(s => typeof s.overallScore === 'number')
+  const averageScore = scoredSessions.length > 0
+    ? (scoredSessions.reduce((sum, s) => sum + (s.overallScore || 0), 0) / scoredSessions.length).toFixed(1)
+    : '7.8'
+
+  const pendingCount = sessions.filter(s => s.status === 'active' || s.status === 'pending').length
+
   const renderCandidateView = () => (
     <div className="space-y-8">
       <div>
-        <h1 className="text-2xl font-bold">Welcome back, {firstName}! 👋</h1>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Welcome back, {firstName}! 👋</h1>
         <p className="mt-2 text-gray-500 dark:text-gray-400">
           Ready for your next interview practice?
         </p>
@@ -88,13 +115,13 @@ export function Dashboard() {
         {[
           {
             label: 'Sessions Completed',
-            value: '12',
+            value: String(completedCount),
             icon: Video,
             iconClass: 'text-primary',
           },
           {
             label: 'Average Score',
-            value: '7.8/10',
+            value: `${averageScore}/10`,
             icon: Trophy,
             iconClass: 'text-success',
           },
@@ -106,7 +133,7 @@ export function Dashboard() {
           },
           {
             label: 'Pending Feedback',
-            value: '2',
+            value: String(pendingCount),
             icon: MessageSquare,
             iconClass: 'text-accent',
           },
@@ -145,7 +172,7 @@ export function Dashboard() {
           </h2>
         </div>
 
-        {mockSessions.length > 0 ? (
+        {sessions.length > 0 ? (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[640px] text-left text-sm">
               <thead className="border-b border-gray-200 text-gray-500 dark:border-gray-700 dark:text-gray-400">
@@ -158,7 +185,7 @@ export function Dashboard() {
                 </tr>
               </thead>
               <tbody>
-                {mockSessions.map((session) => (
+                {sessions.map((session) => (
                   <tr
                     key={session.id}
                     className="border-b border-gray-100 last:border-b-0 dark:border-gray-800"

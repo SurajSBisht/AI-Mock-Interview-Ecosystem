@@ -171,6 +171,9 @@ export interface AIEvaluationResult {
   opportunities: string[]
   followUpThemes: string[]
   confidence?: number
+  overallScore?: number
+  dimensions?: ScoreDimension[]
+  responses?: Response[]
 }
 
 export interface InterviewArchive {
