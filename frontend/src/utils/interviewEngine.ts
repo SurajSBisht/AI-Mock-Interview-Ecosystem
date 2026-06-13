@@ -181,7 +181,10 @@ export async function generateInitialQuestion(
     const data = await response.json()
     return data.question
   } catch (err) {
-    console.warn('[AI Interviewer] Backend server start session failed. Falling back to local simulation.', err)
+console.error(
+  '[AI Interviewer] Backend start session failed FULL ERROR:',
+  err
+)
     return generateInitialQuestionFallback(role, focusAreas, resumeContext)
   }
 }
@@ -255,8 +258,11 @@ export async function generateNextQuestion(
     const data = await response.json()
     return data.question
   } catch (err) {
-    console.warn('[AI Interviewer] Backend next question failed. Falling back to local simulation.', err)
-    return generateNextQuestionFallback(history, role, focusAreas, resumeContext)
+console.error(
+  '[AI Interviewer] Backend next question failed FULL ERROR:',
+  err
+)
+  return generateNextQuestionFallback(history, role, focusAreas, resumeContext)
   }
 }
 

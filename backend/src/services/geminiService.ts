@@ -1,13 +1,13 @@
-import { GoogleGenerativeAI } from '@google/generative-ai'
+import Groq from 'groq-sdk'
 import dotenv from 'dotenv'
 
 dotenv.config()
 
-const apiKey = process.env.GEMINI_API_KEY || ''
-const genAI = new GoogleGenerativeAI(apiKey)
+const groq = new Groq({
+  apiKey: process.env.GROQ_API_KEY
+})
 
-// Use gemini-1.5-flash as the standard fast conversational model
-const MODEL_NAME = 'gemini-2.5-flash'
+const MODEL_NAME = 'llama-3.3-70b-versatile'
 
 export interface ChatMessage {
   speaker: 'assistant' | 'candidate' | 'system'
@@ -18,167 +18,225 @@ export interface ChatMessage {
  * Ask Emma to generate the opening question
  */
 export async function askInitialQuestion(
-  role: string,
-  focusAreas: string[],
-  resumeContext?: string
+role: string,
+focusAreas: string[],
+resumeContext?: string
 ): Promise<string> {
-  const model = genAI.getGenerativeModel({
-    model: MODEL_NAME,
-    systemInstruction: `You are Emma, a professional, friendly, and expert AI Interviewer conducting a mock interview. You speak directly to the candidate in a warm, encouraging, and clear tone. Always keep your responses concise (1 to 3 sentences max) so that they can be easily spoken out loud by a text-to-speech engine. Introduce yourself and ask a single introductory or warm-up question related to the job role.`
-  })
 
-  let prompt = `Job Role: ${role}\n`
-  if (focusAreas && focusAreas.length > 0) {
-    prompt += `Focus Areas: ${focusAreas.join(', ')}\n`
-  }
-  if (resumeContext && resumeContext.trim().length > 0) {
-    prompt += `Candidate Background Context: ${resumeContext}\n`
-  }
-  prompt += `\nPlease introduce yourself, greet the candidate, and ask the first technical or situational question.`
+let prompt = `Job Role: ${role}\n`
 
-  const result = await model.generateContent(prompt)
-  return result.response.text().trim()
+if (focusAreas && focusAreas.length > 0) {
+prompt += `Focus Areas: ${focusAreas.join(', ')}\n`
 }
+
+if (resumeContext && resumeContext.trim().length > 0) {
+prompt += `Candidate Background Context: ${resumeContext}\n`
+}
+
+prompt += `
+
+You are Emma, a professional, friendly, and expert AI Interviewer.
+
+Your job is to:
+
+* Greet the candidate.
+* Introduce yourself.
+* Start a realistic interview.
+* Ask ONLY ONE opening question.
+* Keep response concise (1-3 sentences).
+* Speak naturally like a human interviewer.
+
+Do not provide feedback yet.
+
+Begin the interview now.
+`
+
+const completion = await groq.chat.completions.create({
+model: MODEL_NAME,
+messages: [
+{
+role: 'user',
+content: prompt
+}
+],
+temperature: 0.8
+})
+
+return completion.choices[0]?.message?.content?.trim() || 'Hello, welcome to the interview.'
+}
+
 
 /**
  * Ask Emma to generate the next question based on history
  */
 export async function askNextQuestion(
-  history: ChatMessage[],
-  role: string,
-  focusAreas: string[],
-  resumeContext?: string
+history: ChatMessage[],
+role: string,
+focusAreas: string[],
+resumeContext?: string
 ): Promise<string> {
-  const model = genAI.getGenerativeModel({
-    model: MODEL_NAME,
-    systemInstruction: `You are Emma, a professional, friendly, and intelligent HR Interviewer conducting a mock interview for a ${role} position.
 
-Focus areas include: ${focusAreas.join(', ')}.
+let prompt = `You are Emma, a professional, friendly, and intelligent AI Interviewer conducting a mock interview for a ${role} position.
+
+Focus Areas:
+${focusAreas.join(', ')}
 
 Rules:
 
-1. Ask only ONE question at a time.
+* Ask ONLY ONE question at a time.
 
-2. Keep responses concise (1-3 sentences).
+* Keep responses concise (1-3 sentences).
 
-3. Maintain a natural interview conversation.
+* Behave like a real interviewer.
 
-4. If the candidate gives a strong answer:
+* Maintain conversation memory.
 
-   * Ask a deeper follow-up question.
+* Avoid repeating questions.
 
-5. If the candidate gives a weak or incomplete answer:
+* If the candidate says:
+  "I don't know"
+  "Not sure"
+  "Skip"
+  "Change topic"
+  "Next question"
 
-   * Ask a simpler clarifying question OR briefly guide them.
+  Then:
 
-6. If the candidate says:
+  * Do NOT ask them to elaborate.
+  * Move to another topic.
+  * Or ask an easier question.
 
-   * "I don't know"
-   * "Not sure"
-   * "Skip"
-   * "Change topic"
-   * "Next question"
+* If the role is HR:
 
-   Then DO NOT create a follow-up question based on that answer.
+  * Focus on communication, leadership, teamwork, hiring, conflict resolution, culture, stakeholder management and decision making.
+  * Do NOT switch into software engineering interviews.
 
-   Instead:
+Conversation History:
 
-   * Move to another relevant topic, OR
-   * Ask an easier question.
-
-7. If the candidate gives irrelevant or nonsensical text:
-
-   * Politely point out that the answer does not address the question.
-   * Ask the question again in a simpler way.
-
-8. Avoid repeating the same question.
-
-9. Remember previous discussion topics and gradually cover different focus areas.
-
-10. Behave like a real HR interviewer, not a quiz application.
-
-Speak naturally and professionally.
 `
-  })
 
-  // Format the conversation history for context
-  let prompt = `Candidate Role: ${role}\n`
-  prompt += `Focus Areas: ${focusAreas.join(', ')}\n`
-  if (resumeContext && resumeContext.trim().length > 0) {
-    prompt += `Notes: ${resumeContext}\n`
-  }
-  prompt += `\nConversation History:\n`
+history.forEach((msg) => {
+const speaker =
+msg.speaker === 'assistant'
+? 'Emma'
+: msg.speaker === 'candidate'
+? 'Candidate'
+: 'System'
 
-  history.forEach((msg) => {
-    const name = msg.speaker === 'assistant' ? 'Emma (AI Interviewer)' : 'Candidate'
-    prompt += `${name}: ${msg.content}\n`
-  })
 
-  prompt += `\nEmma (AI Interviewer):`
+prompt += `${speaker}: ${msg.content}\n`
 
-  const result = await model.generateContent(prompt)
-  return result.response.text().trim()
+
+})
+
+if (resumeContext && resumeContext.trim()) {
+prompt += `\nCandidate Resume Context:\n${resumeContext}\n`
+}
+
+prompt += `\nEmma:`
+
+const completion = await groq.chat.completions.create({
+model: MODEL_NAME,
+messages: [
+{
+role: 'user',
+content: prompt
+}
+],
+temperature: 0.8
+})
+
+return completion.choices[0]?.message?.content?.trim() || 'Can you tell me more about your experience?'
 }
 
 /**
  * Evaluate the completed interview transcript and return structured JSON
  */
 export async function evaluateInterview(
-  history: ChatMessage[],
-  role: string,
-  focusAreas: string[]
+history: ChatMessage[],
+role: string,
+focusAreas: string[]
 ): Promise<any> {
-  // We use responseMimeType: "application/json" to force Gemini to return parseable JSON matching our exact scorecard schema
-  const model = genAI.getGenerativeModel({
-    model: MODEL_NAME,
-    generationConfig: {
-      responseMimeType: 'application/json'
-    },
-    systemInstruction: `You are an expert technical interviewer and talent coach. You are evaluating a mock interview for the role of ${role} with focus areas: ${focusAreas.join(', ')}. Analyze the interview history and generate a detailed, constructive scorecard.
-    
-    You must output a single JSON object conforming exactly to this structure:
-    {
-      "summary": "Overall summary of the candidate's performance, communication style, and technical preparedness.",
-      "strengths": ["list of 2-4 key technical or soft skill strengths demonstrated"],
-      "opportunities": ["list of 2-4 areas of improvement or specific gaps identified"],
-      "followUpThemes": ["list of 2-3 specific topics or engineering areas the candidate should study next"],
-      "confidence": 85, // number representing confidence index between 1 and 100
-      "overallScore": 8.0, // overall score out of 10.0 (e.g., 7.5)
-      "dimensions": [
-        { "dimension": "Technical Knowledge", "score": 8.5 },
-        { "dimension": "Communication", "score": 8.0 },
-        { "dimension": "Confidence", "score": 7.5 }
-      ],
-      "responses": [
-        {
-          "questionId": "q-0",
-          "answerText": "candidate response text...",
-          "score": 8, // score for this answer out of 10
-          "feedback": "specific helpful feedback for this turn...",
-          "goodPoints": ["what they did well in this answer"],
-          "improvements": ["how they can improve this specific answer"]
-        }
-      ]
-    }
-    
-    Ensure you generate a response item inside the "responses" list for each answer the candidate gave in the history. Assess their answers honestly but constructively.`
-  })
 
-  let prompt = `Transcript of Interview for ${role}:\n\n`
-  history.forEach((msg) => {
-    const name = msg.speaker === 'assistant' ? 'Emma (AI Interviewer)' : 'Candidate'
-    prompt += `${name}: ${msg.content}\n`
-  })
+let transcript = ''
 
-  prompt += `\nEvaluate this transcript and output the JSON scorecard.`
+history.forEach((msg) => {
+const speaker =
+msg.speaker === 'assistant'
+? 'Emma'
+: msg.speaker === 'candidate'
+? 'Candidate'
+: 'System'
 
-  const result = await model.generateContent(prompt)
-  const textResponse = result.response.text()
 
-  try {
-    return JSON.parse(textResponse)
-  } catch (err) {
-    console.error('Failed to parse Gemini evaluation JSON:', textResponse, err)
-    throw new Error('Evaluation result was not in valid JSON format')
-  }
+transcript += `${speaker}: ${msg.content}\n`
+
+
+})
+
+const prompt = `
+You are an expert interviewer and talent coach.
+
+Role:
+${role}
+
+Focus Areas:
+${focusAreas.join(', ')}
+
+Interview Transcript:
+${transcript}
+
+Return ONLY valid JSON.
+
+Required JSON format:
+
+{
+"summary": "",
+"strengths": [],
+"opportunities": [],
+"followUpThemes": [],
+"confidence": 0,
+"overallScore": 0,
+"dimensions": [
+{
+"dimension": "",
+"score": 0
+}
+],
+"responses": [
+{
+"questionId": "",
+"answerText": "",
+"score": 0,
+"feedback": "",
+"goodPoints": [],
+"improvements": []
+}
+]
+}
+`
+
+const completion = await groq.chat.completions.create({
+model: MODEL_NAME,
+messages: [
+{
+role: 'user',
+content: prompt
+}
+],
+temperature: 0.3,
+response_format: {
+type: 'json_object'
+}
+})
+
+const content =
+completion.choices[0]?.message?.content || '{}'
+
+try {
+return JSON.parse(content)
+} catch (err) {
+console.error('Failed to parse Groq evaluation JSON:', content, err)
+throw new Error('Evaluation result was not valid JSON')
+}
 }
