@@ -4,7 +4,7 @@ dotenv.config();
 const apiKey = process.env.GEMINI_API_KEY || '';
 const genAI = new GoogleGenerativeAI(apiKey);
 // Use gemini-1.5-flash as the standard fast conversational model
-const MODEL_NAME = 'gemini-1.5-flash';
+const MODEL_NAME = 'gemini-1.5-pro';
 /**
  * Ask Emma to generate the opening question
  */
