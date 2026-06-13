@@ -189,6 +189,22 @@ console.error(
   }
 }
 
+export async function uploadResume(file: File): Promise<string> {
+  const formData = new FormData()
+  formData.append('resume', file)
+
+  const response = await fetch(`${BACKEND_URL}/upload-resume`, {
+    method: 'POST',
+    body: formData,
+  })
+
+  if (!response.ok) {
+    throw new Error(`Upload failed: ${response.status}`)
+  }
+
+  const data = await response.json()
+  return data.resumeText
+}
 /**
  * Local fallback question generator (starts session)
  */

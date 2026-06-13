@@ -1,6 +1,11 @@
 import { Request, Response } from 'express'
-import { askInitialQuestion, askNextQuestion, evaluateInterview } from '../services/geminiService.js'
+import { askInitialQuestion, askNextQuestion, evaluateInterview } from '../services/aiService.js'
+import multer from 'multer'
+import { PDFParse } from 'pdf-parse'
 
+export const upload = multer({
+  storage: multer.memoryStorage(),
+})
 export async function startSession(req: Request, res: Response): Promise<any> {
   try {
     const { role, focusAreas, resumeContext } = req.body
@@ -46,5 +51,30 @@ export async function evaluateSession(req: Request, res: Response): Promise<any>
   } catch (err: any) {
     console.error('Error evaluating session:', err)
     return res.status(500).json({ error: 'Failed to generate evaluation: ' + err.message })
+  }
+}
+export async function uploadResume(req: Request, res: Response): Promise<any> {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        error: 'No resume file uploaded',
+      })
+    }
+
+    const parser = new PDFParse({
+      data: req.file.buffer,
+    })
+
+    const result = await parser.getText()
+
+    return res.json({
+      resumeText: result.text,
+    })
+  } catch (err: any) {
+    console.error('Resume upload error:', err)
+
+    return res.status(500).json({
+      error: err.message,
+    })
   }
 }

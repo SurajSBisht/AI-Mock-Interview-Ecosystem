@@ -14,6 +14,7 @@ import {
   MessageSquare,
   AlertCircle,
   Play,
+  Upload,
   LogOut
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
@@ -38,7 +39,8 @@ import type {
 import {
   generateInitialQuestion,
   generateNextQuestion,
-  generateEvaluation
+  generateEvaluation,
+  uploadResume,
 } from '../utils/interviewEngine'
 
 type InterviewDuration = (typeof INTERVIEW_DURATION_OPTIONS)[number]
@@ -168,6 +170,43 @@ function AudioVisualizer({ isActive, color = 'bg-primary' }: { isActive: boolean
   )
 }
 
+function Typewriter({
+  text,
+  active,
+}: {
+  text: string
+  active: boolean
+}) {
+  const [shown, setShown] = useState('')
+  const shownRef = useRef('')
+
+  useEffect(() => {
+    if (!active) return
+
+    setShown('')
+    shownRef.current = ''
+
+    let i = 0
+    const speedMs = 80
+    const timer = window.setInterval(() => {
+      i += Math.random() > 0.7 ? 2 : 1
+      const next = text.slice(0, i)
+      shownRef.current = next
+      setShown(next)
+
+      if (i >= text.length) {
+        window.clearInterval(timer)
+      }
+    }, speedMs)
+
+    return () => {
+      window.clearInterval(timer)
+    }
+  }, [active, text])
+
+  return <>{shown}</>
+}
+
 export function InterviewSession() {
   const navigate = useNavigate()
   const { user } = useAuth()
@@ -201,6 +240,8 @@ export function InterviewSession() {
   const [aiResponses, setAiResponses] = useState<AIResponse[]>([])
   const [currentTranscript, setCurrentTranscript] = useState('')
   const [currentDraft, setCurrentDraft] = useState('')
+  const [isUploadingResume, setIsUploadingResume] = useState(false)
+  const [uploadedResumeName, setUploadedResumeName] = useState('')
   const [isListening, setIsListening] = useState(false)
   const [isSpeaking, setIsSpeaking] = useState(false)
   const [isAwaitingAI, setIsAwaitingAI] = useState(false)
@@ -216,10 +257,36 @@ export function InterviewSession() {
     [config.jobRole],
   )
   const liveTranscript = config.answerMode === 'voice' ? currentTranscript : currentDraft
-  const conversationTurnCount = candidateResponses.length + aiResponses.length
+ const conversationTurnCount = candidateResponses.length + aiResponses.length
 
-  // Derived AI state for audio/glow visualizations
-  const aiState: 'idle' | 'speaking' | 'listening' | 'thinking' = useMemo(() => {
+const handleResumeUpload = async (
+  event: React.ChangeEvent<HTMLInputElement>
+) => {
+  const file = event.target.files?.[0]
+
+  if (!file) return
+
+  try {
+    setIsUploadingResume(true)
+
+    const resumeText = await uploadResume(file)
+
+    setConfig((current) => ({
+      ...current,
+      resumeContext: resumeText,
+    }))
+
+    setUploadedResumeName(file.name)
+  } catch (err) {
+    console.error('Resume upload failed:', err)
+    alert('Failed to upload resume')
+  } finally {
+    setIsUploadingResume(false)
+  }
+}
+
+// Derived AI state for audio/glow visualizations
+const aiState: 'idle' | 'speaking' | 'listening' | 'thinking' = useMemo(() => {
     if (isAwaitingAI) return 'thinking'
     if (isSpeaking) return 'speaking'
     if (isListening) return 'listening'
@@ -285,7 +352,28 @@ export function InterviewSession() {
   const commitDraft = useCallback(
     async (silenceDetected: boolean) => {
       const content = liveTranscript.trim()
+      const normalized = content.toLowerCase()
 
+const waitingPhrases = [
+  'wait',
+  'one sec',
+  'one second',
+  'hold on',
+  'let me think',
+  'thinking',
+  'hmm',
+  'umm',
+  'uh',
+  'give me a moment'
+]
+
+if (
+  content.split(/\s+/).length < 3 ||
+  waitingPhrases.some((phrase) => normalized.includes(phrase))
+) {
+  console.log('[InterviewSession] Waiting for a proper answer')
+  return false
+}
       // Hard guard with logging so we can see why submit does nothing
       if (!sessionId) {
         console.warn('[InterviewSession] commitDraft blocked: missing sessionId')
@@ -1012,8 +1100,52 @@ export function InterviewSession() {
                 })}
               </div>
             </div>
+          <div className="mb-4">
+  {uploadedResumeName ? (
+    <div className="rounded-2xl border border-green-500/30 bg-green-500/10 p-5 text-center">
+      <p className="text-lg font-semibold text-green-600">
+        ✅ Resume Uploaded
+      </p>
 
-            <div>
+      <p className="mt-2 text-sm text-gray-700 dark:text-gray-300">
+        {uploadedResumeName}
+      </p>
+
+      <p className="mt-1 text-xs text-gray-500">
+        Resume content has been loaded for interview customization
+      </p>
+    </div>
+  ) : (
+    <label
+      className="flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-primary/40 p-6 text-center transition hover:border-primary hover:bg-primary/5"
+    >
+      <Upload className="mb-2 h-8 w-8 text-primary" />
+
+      <p className="font-semibold text-gray-900 dark:text-gray-100">
+        Upload Resume
+      </p>
+
+      <p className="mt-1 text-sm text-gray-500">
+        PDF format only
+      </p>
+
+      <input
+        type="file"
+        accept=".pdf"
+        onChange={handleResumeUpload}
+        disabled={isUploadingResume}
+        className="hidden"
+      />
+    </label>
+  )}
+
+  {isUploadingResume && (
+    <p className="mt-3 text-center text-sm text-primary">
+      📄 Reading resume...
+    </p>
+  )}
+</div>
+            <div className="hidden">
               <label className="mb-2 block text-sm font-semibold text-gray-700 dark:text-gray-300">
                 Resume Context / Notes
               </label>
@@ -1203,7 +1335,7 @@ export function InterviewSession() {
 
             <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mt-4 h-4">
               {aiState === 'speaking' && 'Emma is asking a question...'}
-              {aiState === 'listening' && 'Listening to your answer...'}
+              {aiState === 'listening' && '🎤 Your turn to answer'}
               {aiState === 'thinking' && 'Processing response...'}
               {aiState === 'idle' && 'Emma is ready.'}
             </p>
@@ -1262,7 +1394,19 @@ export function InterviewSession() {
             </div>
             
             <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100 leading-relaxed">
-              {activeQuestion}
+              {(() => {
+                const latestAssistant = [...messages]
+                  .reverse()
+                  .find((m) => m.speaker === 'assistant')
+
+                const currentText = latestAssistant?.content ?? activeQuestion
+
+                return (
+                  <span>
+                    {isSpeaking ? <Typewriter text={currentText} active={true} /> : currentText}
+                  </span>
+                )
+              })()}
             </h2>
 
             {/* Quick replay button if they missed the voice */}
