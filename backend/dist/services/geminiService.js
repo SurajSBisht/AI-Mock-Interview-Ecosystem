@@ -6,7 +6,7 @@ const groq = new Groq({
 });
 const MODEL_NAME = 'llama-3.3-70b-versatile';
 /**
- * Ask Emma to generate the opening question
+ * Ask Vox to generate the opening question
  */
 export async function askInitialQuestion(role, focusAreas, resumeContext) {
     let prompt = `Job Role: ${role}\n`;
@@ -18,7 +18,7 @@ export async function askInitialQuestion(role, focusAreas, resumeContext) {
     }
     prompt += `
 
-You are Emma, a professional, friendly, and expert AI Interviewer.
+You are Vox, a professional, friendly, and expert AI Interviewer.
 
 Your job is to:
 
@@ -46,10 +46,10 @@ Begin the interview now.
     return completion.choices[0]?.message?.content?.trim() || 'Hello, welcome to the interview.';
 }
 /**
- * Ask Emma to generate the next question based on history
+ * Ask Vox to generate the next question based on history
  */
 export async function askNextQuestion(history, role, focusAreas, resumeContext) {
-    let prompt = `You are Emma, a professional, friendly, and intelligent AI Interviewer conducting a mock interview for a ${role} position.
+    let prompt = `You are Vox, a professional, friendly, and intelligent AI Interviewer conducting a mock interview for a ${role} position.
 
 Focus Areas:
 ${focusAreas.join(', ')}
@@ -89,7 +89,7 @@ Conversation History:
 `;
     history.forEach((msg) => {
         const speaker = msg.speaker === 'assistant'
-            ? 'Emma'
+            ? 'Vox'
             : msg.speaker === 'candidate'
                 ? 'Candidate'
                 : 'System';
@@ -98,7 +98,7 @@ Conversation History:
     if (resumeContext && resumeContext.trim()) {
         prompt += `\nCandidate Resume Context:\n${resumeContext}\n`;
     }
-    prompt += `\nEmma:`;
+    prompt += `\nVox:`;
     const completion = await groq.chat.completions.create({
         model: MODEL_NAME,
         messages: [
@@ -118,7 +118,7 @@ export async function evaluateInterview(history, role, focusAreas) {
     let transcript = '';
     history.forEach((msg) => {
         const speaker = msg.speaker === 'assistant'
-            ? 'Emma'
+            ? 'Vox'
             : msg.speaker === 'candidate'
                 ? 'Candidate'
                 : 'System';

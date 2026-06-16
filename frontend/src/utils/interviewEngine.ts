@@ -163,7 +163,8 @@ const BEHAVIORAL_QUESTIONS = [
 export async function generateInitialQuestion(
   role: string,
   focusAreas: string[],
-  resumeContext?: string
+  resumeContext?: string,
+  durationMinutes?: number
 ): Promise<string> {
   try {
     const response = await fetch(`${BACKEND_URL}/start`, {
@@ -171,7 +172,12 @@ export async function generateInitialQuestion(
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ role, focusAreas, resumeContext }),
+body: JSON.stringify({
+  role,
+  focusAreas,
+  resumeContext,
+  durationMinutes,
+}),
     })
 
     if (!response.ok) {
@@ -215,7 +221,7 @@ async function generateInitialQuestionFallback(
 ): Promise<string> {
   await sleep(1000)
 
-  let intro = `Hi, I am Emma, your AI Interviewer today. We will be conducting a mock interview for the ${role} position.`
+  let intro = `Hi, I am Vox, your AI Interviewer today. We will be conducting a mock interview for the ${role} position.`
   if (focusAreas && focusAreas.length > 0) {
     intro += ` We will focus on key areas including ${focusAreas.join(', ')}.`
   }
@@ -243,7 +249,8 @@ export async function generateNextQuestion(
   history: ConversationMessage[],
   role: string,
   focusAreas: string[],
-  resumeContext?: string
+  resumeContext?: string,
+  durationMinutes?: number
 ): Promise<string> {
   try {
     // Format history for backend ChatMessage specifications
@@ -259,12 +266,13 @@ export async function generateNextQuestion(
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        history: formattedHistory,
-        role,
-        focusAreas,
-        resumeContext,
-      }),
+     body: JSON.stringify({
+  history: formattedHistory,
+  role,
+  focusAreas,
+  resumeContext,
+  durationMinutes,
+}),
     })
 
     if (!response.ok) {

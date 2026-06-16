@@ -6,11 +6,11 @@ export const upload = multer({
 });
 export async function startSession(req, res) {
     try {
-        const { role, focusAreas, resumeContext } = req.body;
+        const { role, focusAreas, resumeContext, durationMinutes } = req.body;
         if (!role) {
             return res.status(400).json({ error: 'Missing required field: role' });
         }
-        const question = await askInitialQuestion(role, focusAreas || [], resumeContext);
+        const question = await askInitialQuestion(role, focusAreas || [], resumeContext, durationMinutes);
         return res.json({ question });
     }
     catch (err) {
@@ -20,11 +20,11 @@ export async function startSession(req, res) {
 }
 export async function nextQuestion(req, res) {
     try {
-        const { history, role, focusAreas, resumeContext } = req.body;
+        const { history, role, focusAreas, resumeContext, durationMinutes } = req.body;
         if (!history || !role) {
             return res.status(400).json({ error: 'Missing required fields: history and role' });
         }
-        const question = await askNextQuestion(history, role, focusAreas || [], resumeContext);
+        const question = await askNextQuestion(history, role, focusAreas || [], resumeContext, durationMinutes);
         return res.json({ question });
     }
     catch (err) {

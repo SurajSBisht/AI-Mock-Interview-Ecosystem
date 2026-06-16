@@ -117,7 +117,7 @@ export function EvaluationResult() {
             Interview Scorecard
           </h1>
           <p className="mt-1.5 text-sm text-gray-500 dark:text-gray-400">
-            Conversational analysis compiled by Emma, your AI Coach. Structured for seamless backend turn streaming.
+            Conversational analysis compiled by Vox, your AI Coach. Structured for seamless backend turn streaming.
           </p>
         </div>
 
@@ -216,7 +216,7 @@ export function EvaluationResult() {
 
                     {/* Question text */}
                     <div className="bg-gray-50 dark:bg-gray-950 p-3.5 rounded-xl border border-gray-100 dark:border-gray-900 mb-4">
-                      <p className="text-xs font-semibold text-primary uppercase tracking-wide mb-1">Emma asked:</p>
+                      <p className="text-xs font-semibold text-primary uppercase tracking-wide mb-1">Vox asked:</p>
                       <p className="text-sm font-bold text-gray-800 dark:text-gray-200">
                         {index === 0 ? archive.messages.find(m => m.speaker === 'assistant')?.content || 'Tell me about yourself.' : archive.messages.filter(m => m.speaker === 'assistant')[index]?.content || 'Follow-up question.'}
                       </p>
@@ -233,7 +233,7 @@ export function EvaluationResult() {
                     {/* Feedback and highlights */}
                     <div className="pt-4 border-t border-gray-100 dark:border-gray-800 space-y-3">
                       <p className="text-xs text-gray-500 dark:text-gray-400">
-                        <span className="font-bold text-gray-700 dark:text-gray-300">Emma's analysis: </span>
+                        <span className="font-bold text-gray-700 dark:text-gray-300">Vox's analysis: </span>
                         {resp.feedback}
                       </p>
 

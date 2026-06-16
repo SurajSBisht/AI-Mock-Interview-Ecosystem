@@ -230,7 +230,7 @@ export function InterviewSession() {
   const [config, setConfig] = useState<SessionConfig>({
     jobRole: JOB_ROLES[0],
     techStacks: getContextChips(JOB_ROLES[0]).slice(0, 3),
-    durationMinutes: 18,
+    durationMinutes: 15,
     answerMode: 'voice',
     resumeContext: '',
   })
@@ -428,11 +428,12 @@ if (
       // Fetch next question asynchronously from client-side AI mock engine
       try {
         const nextQuestion = await generateNextQuestion(
-          nextMessages,
-          config.jobRole,
-          config.techStacks,
-          config.resumeContext
-        )
+  nextMessages,
+  config.jobRole,
+  config.techStacks,
+  config.resumeContext,
+  config.durationMinutes
+)
 
         const assistantMsgId = crypto.randomUUID()
         const assistantMsg: ConversationMessage = {
@@ -825,6 +826,7 @@ if (
   }
 
   const startSession = async () => {
+
     const nextSessionId = crypto.randomUUID()
     
     setSessionId(nextSessionId)
@@ -840,10 +842,11 @@ if (
 
     try {
       const initialQuestionText = await generateInitialQuestion(
-        config.jobRole,
-        config.techStacks,
-        config.resumeContext
-      )
+  config.jobRole,
+  config.techStacks,
+  config.resumeContext,
+  config.durationMinutes
+)
 
       const introMsgId = crypto.randomUUID()
       const introMessage: ConversationMessage = {
@@ -932,7 +935,7 @@ if (
               Configure Your AI Interview
             </h1>
             <p className="mt-2 text-sm text-gray-500 dark:text-gray-400 max-w-md mx-auto">
-              Choose your role, focus tags, and answer mode. Emma, your AI Coach, will ask customized questions based on your selections.
+              Choose your role, focus tags, and answer mode. Vox, your AI Coach, will ask customized questions based on your selections.
             </p>
           </div>
 
@@ -981,7 +984,7 @@ if (
                 })}
               </div>
               <p className="mt-2 text-xs text-gray-400">
-                Emma will tailor questions specifically targeting these concepts.
+                Vox will tailor questions specifically targeting these concepts.
               </p>
             </div>
 
@@ -990,7 +993,7 @@ if (
                 <label className="mb-2 block text-sm font-semibold text-gray-700 dark:text-gray-300">
                   Interview Length
                 </label>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-3 gap-3">
                   {INTERVIEW_DURATION_OPTIONS.map((minutes) => {
                     const selected = config.durationMinutes === minutes
                     return (
@@ -1010,7 +1013,19 @@ if (
                             : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700',
                         )}
                       >
-                        {formatDuration(minutes)}
+                       <div className="flex flex-col items-center">
+  <span className="font-bold">
+    {minutes === 15
+      ? '⚡ Quick Practice'
+      : minutes === 30
+      ? '🎯 Standard'
+      : '🏆 Deep Interview'}
+  </span>
+
+  <span className="text-xs opacity-80">
+    {minutes} Minutes
+  </span>
+</div>
                       </button>
                     )
                   })}
@@ -1158,15 +1173,25 @@ if (
                   }))
                 }
                 rows={3}
-                placeholder="Paste summary points from your resume or job descriptions to customize Emma's focus."
+                placeholder="Paste summary points from your resume or job descriptions to customize Vox's focus."
                 className={cn(
                   'w-full rounded-xl border border-gray-300 bg-white px-4 py-3 text-sm shadow-sm transition focus:outline-none focus:ring-2 focus:ring-primary dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100',
                 )}
               />
             </div>
-
-            <Button type="button" size="lg" className="w-full mt-2 font-bold py-3.5 shadow-lg shadow-primary/30" onClick={startSession}>
-              <Play className="h-5 w-5 fill-current" />
+{!config.resumeContext.trim() && (
+  <p className="mb-3 text-center text-sm text-red-500">
+    Please upload your resume to begin the interview.
+  </p>
+)}
+<Button
+  type="button"
+  size="lg"
+  disabled={!config.resumeContext.trim()}
+  className="w-full mt-2 font-bold py-3.5 shadow-lg shadow-primary/30"
+  onClick={startSession}
+>
+           <Play className="h-5 w-5 fill-current" />
               Begin AI Interview
             </Button>
           </div>
@@ -1186,7 +1211,7 @@ if (
             Interview Finished!
           </h1>
           <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
-            Great job! Emma is synthesizing your evaluation report based on your responses.
+            Great job! Vox is synthesizing your evaluation report based on your responses.
           </p>
 
           <div className="mt-8 grid grid-cols-3 gap-3 text-sm bg-gray-50 dark:bg-gray-900 p-4 rounded-2xl">
@@ -1274,7 +1299,7 @@ if (
         {/* Left Column: Avatars/Video Stream Cards */}
         <div className="space-y-6">
           
-          {/* AI Interviewer Emma Box */}
+          {/* AI Interviewer Vox Box */}
           <Card className={cn(
             'flex flex-col items-center justify-center p-6 text-center border-2 transition-all duration-300 shadow-lg relative overflow-hidden',
             aiState === 'speaking' && 'animate-glow-primary border-primary/40',
@@ -1295,7 +1320,7 @@ if (
               </span>
             </div>
 
-            {/* Emma Circular Avatar with state glows */}
+            {/* Vox Circular Avatar with state glows */}
             <div className="relative mb-4 mt-2">
               <div className={cn(
                 'absolute inset-0 rounded-full scale-105 border border-dashed opacity-0 transition-all duration-300',
@@ -1304,7 +1329,7 @@ if (
               )} style={{ animationDuration: '6s' }} />
               <img
                 src="/ai_avatar.png"
-                alt="Emma"
+                alt="Vox"
                 className={cn(
                   'w-24 h-24 rounded-full border-4 object-cover transition-transform duration-300 shadow-md',
                   aiState === 'speaking' && 'border-primary scale-[1.02]',
@@ -1321,7 +1346,7 @@ if (
 
             <h3 className="font-bold text-gray-900 dark:text-gray-100 flex items-center gap-1.5 justify-center">
               <Bot className="h-4 w-4 text-primary" />
-              Emma
+              Vox
             </h3>
             <p className="text-xs text-gray-400 mt-0.5">AI Interview Coach</p>
 
@@ -1334,10 +1359,10 @@ if (
             </div>
 
             <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mt-4 h-4">
-              {aiState === 'speaking' && 'Emma is asking a question...'}
+              {aiState === 'speaking' && 'Vox is asking a question...'}
               {aiState === 'listening' && '🎤 Your turn to answer'}
               {aiState === 'thinking' && 'Processing response...'}
-              {aiState === 'idle' && 'Emma is ready.'}
+              {aiState === 'idle' && 'Vox is ready.'}
             </p>
           </Card>
 
@@ -1430,7 +1455,7 @@ if (
                 {isVoiceMode ? 'Voice Capture' : 'Your Answer'}
               </h3>
               <Badge
-                label={aiState === 'listening' ? 'Listening' : aiState === 'thinking' ? 'Emma is thinking' : 'Awaiting prompt'}
+                label={aiState === 'listening' ? 'Listening' : aiState === 'thinking' ? 'Vox is thinking' : 'Awaiting prompt'}
                 variant={aiState === 'listening' ? 'success' : aiState === 'thinking' ? 'warning' : 'default'}
               />
             </div>
@@ -1486,7 +1511,7 @@ if (
                     {isListening 
                       ? 'Speaking... Silence detection will submit automatically, or click button to finish.' 
                       : isSpeaking 
-                        ? 'Wait until Emma finishes speaking...' 
+                        ? 'Wait until Vox finishes speaking...' 
                         : 'Click the microphone button to start recording your response.'}
                   </p>
                 </div>
@@ -1556,7 +1581,7 @@ if (
                         )}
                       >
                         <div className="mb-0.5 font-bold opacity-60 text-[9px] uppercase tracking-wider">
-                          {isCandidate ? 'You' : isAssistant ? 'Emma' : 'System'}
+                          {isCandidate ? 'You' : isAssistant ? 'Vox' : 'System'}
                         </div>
                         <p>{message.content}</p>
                       </div>

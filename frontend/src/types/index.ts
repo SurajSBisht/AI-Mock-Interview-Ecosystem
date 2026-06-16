@@ -143,7 +143,7 @@ export interface SessionMetadata {
   candidateName: string
   jobRole: string
   techStacks: string[]
-  durationMinutes: 10 | 18
+durationMinutes: 15 | 30 | 45
   answerMode: AnswerMode
   resumeContext?: string
   createdAt: string
