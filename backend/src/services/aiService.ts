@@ -14,6 +14,48 @@ export interface ChatMessage {
   content: string
 }
 
+interface EvaluationScoreJustification {
+  communication: string
+  confidence: string
+  leadership: string
+  technical: string
+  problemSolving: string
+}
+
+interface RadarChartScores {
+  communication: number
+  confidence: number
+  leadership: number
+  technical: number
+  problemSolving: number
+}
+
+interface InterviewEvaluationResult {
+  summary: string
+  strengths: string[]
+  opportunities: string[]
+  recommendedTopics: string[]
+  scoreJustification: EvaluationScoreJustification
+  radarChart: RadarChartScores
+  communicationScore: number
+  confidenceScore: number
+  leadershipScore: number
+  technicalScore: number
+  problemSolvingScore: number
+  overallScore: number
+  confidence: number
+  followUpThemes?: string[]
+  dimensions?: { dimension: string; score: number }[]
+  responses?: Array<{
+    questionId: string
+    answerText: string
+    score: number
+    feedback: string
+    goodPoints: string[]
+    improvements: string[]
+  }>
+}
+
 /**
  * Ask Vox to generate the opening question
  */
@@ -114,6 +156,44 @@ Rules:
 * Behave like a real interviewer.
 
 * Maintain conversation memory.
+* Interview Intelligence Rules:
+
+  * If a candidate repeatedly says they do not know a topic, cannot remember it, have no experience with it, or cannot answer it:
+
+    * Treat that topic as a known weak area.
+    * Do not repeatedly ask questions from the same topic.
+    * Do not keep rephrasing the same concept.
+
+  * After two unsuccessful attempts on the same topic:
+
+    * Move to a different topic.
+    * Explore projects, databases, programming languages, academics, teamwork, leadership, internships, problem solving, or other skills from the resume.
+
+  * The goal is to evaluate the candidate, not trap them in one weak area.
+
+  * If the candidate struggles with the selected technology stack:
+
+    * Evaluate transferable skills.
+    * Evaluate programming fundamentals.
+    * Evaluate projects.
+    * Evaluate databases.
+    * Evaluate problem solving ability.
+    * Evaluate teamwork and leadership.
+    * Evaluate learning ability.
+
+  * Do not force every question to connect back to the selected role or technology stack.
+
+  * If the candidate fails three consecutive technical questions:
+
+    * Reduce difficulty.
+    * Move to easier concepts.
+    * Discuss practical projects.
+    * Explore strengths instead of repeatedly focusing on weaknesses.
+
+  * Remember topics the candidate answered well and topics they repeatedly failed to answer.
+
+  * Spend more time evaluating strengths after weaknesses have been identified.
+
 * Interview Length Guidelines:
 
   * 15 Minute Mode (Quick Practice):
@@ -312,6 +392,7 @@ If the answer is relevant but not very detailed:
 * Ask one clarification question OR continue naturally.
 Never assume a topic has been answered if the candidate's response is shorter than a complete sentence or appears unfinished.
 
+
 `
 
 history.forEach((msg) => {
@@ -348,6 +429,452 @@ temperature: 0.8
 return completion.choices[0]?.message?.content?.trim() || 'Can you tell me more about your experience?'
 }
 
+const UNCERTAINTY_PHRASES = [
+  "i don't know",
+  'not sure',
+  "can't remember",
+  'cant remember',
+  'skip',
+  'change topic',
+  'maybe',
+]
+
+const COMMUNICATION_MARKERS = [
+  'first',
+  'second',
+  'third',
+  'finally',
+  'for example',
+  'in summary',
+  'to be specific',
+  'because',
+]
+
+const LEADERSHIP_MARKERS = [
+  'led',
+  'owned',
+  'owned the',
+  'coordinated',
+  'collaborated',
+  'partnered',
+  'mentored',
+  'responsible',
+  'initiated',
+  'decided',
+  'drove',
+  'aligned',
+  'resolved',
+]
+
+const PROBLEM_SOLVING_MARKERS = [
+  'debug',
+  'root cause',
+  'trade-off',
+  'trade off',
+  'analy',
+  'hypothesi',
+  'optimiz',
+  'measure',
+  'test',
+  'iterate',
+  'instrument',
+  'performance',
+  'latency',
+  'scal',
+  'decision',
+]
+
+const TECH_KEYWORDS_BY_ROLE: Record<string, string[]> = {
+  frontend: ['react', 'typescript', 'javascript', 'css', 'html', 'accessibility', 'component', 'state', 'render', 'performance', 'architecture'],
+  backend: ['api', 'apis', 'database', 'databases', 'system design', 'performance', 'auth', 'authentication', 'cache', 'scalability', 'node', 'express'],
+  hr: ['communication', 'hiring', 'stakeholder', 'conflict', 'culture', 'teamwork', 'feedback', 'leadership'],
+  generic: ['project', 'implementation', 'architecture', 'workflow', 'testing', 'design'],
+}
+
+function clampScore(value: number, min = 0, max = 100): number {
+  if (Number.isNaN(value)) {
+    return min
+  }
+
+  return Math.max(min, Math.min(max, Math.round(value)))
+}
+
+function normalizeScore(value: unknown, fallback: number): number {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return clampScore(value)
+  }
+
+  return clampScore(fallback)
+}
+
+function normalizeStringArray(value: unknown, fallback: string[]): string[] {
+  if (!Array.isArray(value)) {
+    return fallback
+  }
+
+  return value
+    .map((item) => (typeof item === 'string' ? item.trim() : ''))
+    .filter(Boolean)
+}
+
+function countOccurrences(text: string, phrases: string[]): number {
+  const lowerText = text.toLowerCase()
+
+  return phrases.reduce((total, phrase) => {
+    const needle = phrase.toLowerCase()
+    if (!needle) {
+      return total
+    }
+
+    let index = 0
+    let count = 0
+    while ((index = lowerText.indexOf(needle, index)) !== -1) {
+      count += 1
+      index += needle.length
+    }
+
+    return total + count
+  }, 0)
+}
+
+function extractTranscript(history: ChatMessage[]): { transcript: string; candidateAnswers: string[] } {
+  const candidateAnswers: string[] = []
+  let transcript = ''
+
+  history.forEach((msg) => {
+    const speaker =
+      msg.speaker === 'assistant'
+        ? 'Vox'
+        : msg.speaker === 'candidate'
+          ? 'Candidate'
+          : 'System'
+
+    transcript += `${speaker}: ${msg.content}\n`
+
+    if (msg.speaker === 'candidate') {
+      candidateAnswers.push(msg.content)
+    }
+  })
+
+  return { transcript, candidateAnswers }
+}
+
+function buildRoleKeywords(role: string, focusAreas: string[]): string[] {
+  const lowerRole = role.toLowerCase()
+
+  if (lowerRole.includes('frontend')) return TECH_KEYWORDS_BY_ROLE.frontend
+  if (lowerRole.includes('backend')) return TECH_KEYWORDS_BY_ROLE.backend
+  if (lowerRole.includes('hr') || lowerRole.includes('recruit') || lowerRole.includes('talent')) return TECH_KEYWORDS_BY_ROLE.hr
+
+  const focusKeywords = focusAreas
+    .map((item) => item.toLowerCase())
+    .filter(Boolean)
+
+  return [...TECH_KEYWORDS_BY_ROLE.generic, ...focusKeywords]
+}
+
+function analyzeTranscript(history: ChatMessage[], role: string, focusAreas: string[]) {
+  const { transcript, candidateAnswers } = extractTranscript(history)
+  const lowerTranscript = transcript.toLowerCase()
+  const totalWords = candidateAnswers.reduce((sum, answer) => sum + answer.trim().split(/\s+/).filter(Boolean).length, 0)
+  const averageWords = candidateAnswers.length > 0 ? totalWords / candidateAnswers.length : 0
+
+  const uncertaintyCount = countOccurrences(lowerTranscript, UNCERTAINTY_PHRASES)
+  const communicationCount = countOccurrences(lowerTranscript, COMMUNICATION_MARKERS)
+  const leadershipCount = countOccurrences(lowerTranscript, LEADERSHIP_MARKERS)
+  const problemSolvingCount = countOccurrences(lowerTranscript, PROBLEM_SOLVING_MARKERS)
+
+  const roleKeywords = buildRoleKeywords(role, focusAreas)
+  const technicalCount = roleKeywords.reduce((count, keyword) => {
+    if (!keyword) {
+      return count
+    }
+
+    const regex = new RegExp(`\\b${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi')
+    const matches = lowerTranscript.match(regex)
+    return count + (matches?.length || 0)
+  }, 0)
+
+  const shortAnswers = candidateAnswers.filter((answer) => answer.trim().split(/\s+/).filter(Boolean).length < 8).length
+  const detailedAnswers = candidateAnswers.filter((answer) => answer.trim().split(/\s+/).filter(Boolean).length >= 25).length
+
+  const communicationScore = clampScore(
+    42 + averageWords * 0.55 + communicationCount * 5 + detailedAnswers * 4 - shortAnswers * 5 - uncertaintyCount * 3,
+  )
+  const confidenceScore = clampScore(
+    48 + leadershipCount * 3 + detailedAnswers * 3 - uncertaintyCount * 7 - shortAnswers * 2,
+  )
+  const leadershipScore = clampScore(
+    56 + leadershipCount * 5 + detailedAnswers * 2 - uncertaintyCount * 2,
+  )
+  const technicalScore = clampScore(
+    44 + technicalCount * 4 + focusAreas.length * 2 + averageWords * 0.15,
+  )
+  const problemSolvingScore = clampScore(
+    45 + problemSolvingCount * 5 + technicalCount * 1.5 + communicationCount * 1.5 - uncertaintyCount * 2,
+  )
+
+  return {
+    transcript,
+    candidateAnswers,
+    averageWords,
+    uncertaintyCount,
+    communicationCount,
+    leadershipCount,
+    problemSolvingCount,
+    technicalCount,
+    shortAnswers,
+    detailedAnswers,
+    communicationScore,
+    confidenceScore,
+    leadershipScore,
+    technicalScore,
+    problemSolvingScore,
+  }
+}
+
+function buildRecommendedTopics(role: string, focusAreas: string[], scores: RadarChartScores): string[] {
+  const topics: string[] = []
+  const lowerRole = role.toLowerCase()
+
+  if (scores.technical < 80) {
+    if (lowerRole.includes('frontend')) {
+      topics.push('React component design and rendering performance')
+      topics.push('TypeScript typing strategies for complex UI states')
+    } else if (lowerRole.includes('backend')) {
+      topics.push('API design, database trade-offs, and caching')
+      topics.push('System design for reliability and performance')
+    } else if (lowerRole.includes('hr')) {
+      topics.push('Stakeholder communication and conflict resolution')
+      topics.push('Hiring process calibration and structured interviewing')
+    } else {
+      topics.push('Role-specific technical depth and project implementation details')
+    }
+  }
+
+  if (scores.problemSolving < 80) {
+    topics.push('Debugging approach and trade-off explanation')
+  }
+
+  if (scores.confidence < 80) {
+    topics.push('Answering with clearer ownership and more decisive language')
+  }
+
+  if (focusAreas.length > 0) {
+    topics.push(`Deepen coverage of ${focusAreas[0]}`)
+  }
+
+  return Array.from(new Set(topics)).slice(0, 5)
+}
+
+function buildJustification(label: string, score: number, evidence: string, reduction: string): string {
+  return `${label}: ${score}. Evidence: ${evidence} Reduction: ${reduction}.`
+}
+
+function buildFallbackEvaluation(history: ChatMessage[], role: string, focusAreas: string[]): InterviewEvaluationResult {
+  const analysis = analyzeTranscript(history, role, focusAreas)
+  const radarChart: RadarChartScores = {
+    communication: analysis.communicationScore,
+    confidence: analysis.confidenceScore,
+    leadership: analysis.leadershipScore,
+    technical: analysis.technicalScore,
+    problemSolving: analysis.problemSolvingScore,
+  }
+
+  const overallScore = clampScore(
+    (radarChart.communication + radarChart.confidence + radarChart.leadership + radarChart.technical + radarChart.problemSolving) / 5,
+  )
+
+  const candidateCount = analysis.candidateAnswers.length
+  const uncertaintyExample = UNCERTAINTY_PHRASES.find((phrase) => analysis.transcript.toLowerCase().includes(phrase))
+  const summaryTone = overallScore >= 80 ? 'strong' : overallScore >= 65 ? 'solid' : 'developing'
+
+  const strengths = [
+    analysis.detailedAnswers > 0
+      ? 'Provided at least one detailed answer with useful context and explanation.'
+      : 'Stayed engaged throughout the interview and responded to prompts.',
+  ]
+
+  if (radarChart.communication >= 75) {
+    strengths.push('Communicated ideas in a generally structured and understandable way.')
+  }
+
+  if (radarChart.technical >= 75) {
+    strengths.push('Demonstrated relevant role-specific technical awareness.')
+  }
+
+  if (radarChart.confidence >= 75) {
+    strengths.push('Showed ownership and confidence in several responses.')
+  }
+
+  const opportunities = [
+    analysis.shortAnswers > 0
+      ? 'Expand shorter responses with more context, trade-offs, and concrete examples.'
+      : 'Continue strengthening answer depth and precision in higher-pressure questions.',
+  ]
+
+  if (analysis.uncertaintyCount > 0) {
+    opportunities.push('Reduce uncertainty language such as "not sure" or "I do not know" by sharing partial reasoning when possible.')
+  }
+
+  if (radarChart.problemSolving < 75) {
+    opportunities.push('Explain debugging steps, alternatives, and trade-offs more explicitly.')
+  }
+
+  const scoreJustification: EvaluationScoreJustification = {
+    communication: buildJustification(
+      'Communication score',
+      radarChart.communication,
+      `${analysis.communicationCount} structure markers were present across ${candidateCount} candidate answers, with an average answer length of ${analysis.averageWords.toFixed(1)} words.`,
+      `${analysis.shortAnswers} short answers and ${analysis.uncertaintyCount} uncertainty phrases lowered clarity and completeness.`,
+    ),
+    confidence: buildJustification(
+      'Confidence score',
+      radarChart.confidence,
+      `${analysis.leadershipCount} ownership and action-oriented markers appeared in the transcript.`,
+      `${analysis.uncertaintyCount} uncertainty phrases${uncertaintyExample ? ` including "${uncertaintyExample}"` : ''} reduced decisiveness.`,
+    ),
+    leadership: buildJustification(
+      'Leadership score',
+      radarChart.leadership,
+      `${analysis.leadershipCount} leadership or collaboration signals were detected, including ownership language where the candidate described work.`,
+      'A limited number of explicit leadership stories kept the score at a baseline rather than a top-band result.',
+    ),
+    technical: buildJustification(
+      'Technical score',
+      radarChart.technical,
+      `${analysis.technicalCount} role-relevant technical terms matched the selected role and focus areas.`,
+      'The score was capped because the transcript did not consistently show deep implementation detail on every answer.',
+    ),
+    problemSolving: buildJustification(
+      'Problem solving score',
+      radarChart.problemSolving,
+      `${analysis.problemSolvingCount} reasoning markers such as debugging, trade-off, and optimization language were observed.`,
+      'More explicit step-by-step reasoning would make the approach easier to evaluate.',
+    ),
+  }
+
+  const recommendedTopics = buildRecommendedTopics(role, focusAreas, radarChart)
+
+  return {
+    summary: `This ${summaryTone} interview for the ${role} role showed ${overallScore >= 80 ? 'strong' : 'moderate'} performance across communication, technical depth, and reasoning. The candidate answered ${candidateCount} questions with the clearest evidence in ${focusAreas.length > 0 ? focusAreas.join(', ') : 'role fundamentals'}.`,
+    strengths,
+    opportunities,
+    recommendedTopics,
+    scoreJustification,
+    radarChart,
+    communicationScore: radarChart.communication,
+    confidenceScore: radarChart.confidence,
+    leadershipScore: radarChart.leadership,
+    technicalScore: radarChart.technical,
+    problemSolvingScore: radarChart.problemSolving,
+    overallScore,
+    confidence: clampScore(72 + analysis.detailedAnswers * 4 - analysis.uncertaintyCount * 5, 55, 95),
+    followUpThemes: recommendedTopics,
+    dimensions: [
+      { dimension: 'Communication', score: radarChart.communication / 10 },
+      { dimension: 'Confidence', score: radarChart.confidence / 10 },
+      { dimension: 'Leadership', score: radarChart.leadership / 10 },
+      { dimension: 'Technical', score: radarChart.technical / 10 },
+      { dimension: 'Problem Solving', score: radarChart.problemSolving / 10 },
+    ],
+  }
+}
+
+function normalizeEvaluation(raw: unknown, fallback: InterviewEvaluationResult): InterviewEvaluationResult {
+  if (!raw || typeof raw !== 'object') {
+    return fallback
+  }
+
+  const source = raw as Record<string, unknown>
+  const communicationScore = normalizeScore(source.communicationScore, fallback.communicationScore)
+  const confidenceScore = normalizeScore(source.confidenceScore, fallback.confidenceScore)
+  const leadershipScore = normalizeScore(source.leadershipScore, fallback.leadershipScore)
+  const technicalScore = normalizeScore(source.technicalScore, fallback.technicalScore)
+  const problemSolvingScore = normalizeScore(source.problemSolvingScore, fallback.problemSolvingScore)
+  const radarSource = source.radarChart && typeof source.radarChart === 'object' ? (source.radarChart as Record<string, unknown>) : {}
+  const radarChart: RadarChartScores = {
+    communication: normalizeScore(radarSource.communication, communicationScore),
+    confidence: normalizeScore(radarSource.confidence, confidenceScore),
+    leadership: normalizeScore(radarSource.leadership, leadershipScore),
+    technical: normalizeScore(radarSource.technical, technicalScore),
+    problemSolving: normalizeScore(radarSource.problemSolving, problemSolvingScore),
+  }
+
+  const scoreJustificationSource =
+    source.scoreJustification && typeof source.scoreJustification === 'object'
+      ? (source.scoreJustification as Record<string, unknown>)
+      : {}
+
+  const recommendedTopics = normalizeStringArray(source.recommendedTopics, fallback.recommendedTopics)
+  const strengths = normalizeStringArray(source.strengths, fallback.strengths)
+  const opportunities = normalizeStringArray(source.opportunities, fallback.opportunities)
+
+  const dimensions = Array.isArray(source.dimensions)
+    ? source.dimensions
+        .map((item) => {
+          if (!item || typeof item !== 'object') {
+            return null
+          }
+
+          const itemRecord = item as Record<string, unknown>
+          const dimension = typeof itemRecord.dimension === 'string' ? itemRecord.dimension : ''
+          const score = normalizeScore(itemRecord.score, 0) / 10
+
+          if (!dimension) {
+            return null
+          }
+
+          return { dimension, score }
+        })
+        .filter(Boolean) as { dimension: string; score: number }[]
+    : fallback.dimensions
+
+  const responses = Array.isArray(source.responses)
+    ? (source.responses as InterviewEvaluationResult['responses'])
+    : fallback.responses
+
+  return {
+    summary: typeof source.summary === 'string' && source.summary.trim() ? source.summary : fallback.summary,
+    strengths,
+    opportunities,
+    recommendedTopics,
+    scoreJustification: {
+      communication:
+        typeof scoreJustificationSource.communication === 'string' && scoreJustificationSource.communication.trim()
+          ? scoreJustificationSource.communication
+          : fallback.scoreJustification.communication,
+      confidence:
+        typeof scoreJustificationSource.confidence === 'string' && scoreJustificationSource.confidence.trim()
+          ? scoreJustificationSource.confidence
+          : fallback.scoreJustification.confidence,
+      leadership:
+        typeof scoreJustificationSource.leadership === 'string' && scoreJustificationSource.leadership.trim()
+          ? scoreJustificationSource.leadership
+          : fallback.scoreJustification.leadership,
+      technical:
+        typeof scoreJustificationSource.technical === 'string' && scoreJustificationSource.technical.trim()
+          ? scoreJustificationSource.technical
+          : fallback.scoreJustification.technical,
+      problemSolving:
+        typeof scoreJustificationSource.problemSolving === 'string' && scoreJustificationSource.problemSolving.trim()
+          ? scoreJustificationSource.problemSolving
+          : fallback.scoreJustification.problemSolving,
+    },
+    radarChart,
+    communicationScore,
+    confidenceScore,
+    leadershipScore,
+    technicalScore,
+    problemSolvingScore,
+    overallScore: normalizeScore(source.overallScore, fallback.overallScore),
+    confidence: normalizeScore(source.confidence, fallback.confidence),
+    followUpThemes: normalizeStringArray(source.followUpThemes, fallback.followUpThemes || recommendedTopics),
+    dimensions,
+    responses,
+  }
+}
+
 /**
  * Evaluate the completed interview transcript and return structured JSON
  */
@@ -355,87 +882,119 @@ export async function evaluateInterview(
 history: ChatMessage[],
 role: string,
 focusAreas: string[]
-): Promise<any> {
+): Promise<InterviewEvaluationResult> {
+  const { transcript, candidateAnswers } = extractTranscript(history)
+  const analysis = analyzeTranscript(history, role, focusAreas)
+  const fallback = buildFallbackEvaluation(history, role, focusAreas)
+  const roleHint = role.toLowerCase().includes('frontend')
+    ? 'frontend engineering'
+    : role.toLowerCase().includes('backend')
+      ? 'backend engineering'
+      : role.toLowerCase().includes('hr')
+        ? 'HR and talent'
+        : 'the selected role'
 
-let transcript = ''
+  const prompt = `
+You are a senior interviewer and evidence-based talent evaluator.
 
-history.forEach((msg) => {
-const speaker =
-msg.speaker === 'assistant'
-? 'Vox'
-: msg.speaker === 'candidate'
-? 'Candidate'
-: 'System'
-
-
-transcript += `${speaker}: ${msg.content}\n`
-
-
-})
-
-const prompt = `
-You are an expert interviewer and talent coach.
+Analyze the full interview transcript and score the candidate using only evidence from the conversation.
+Do not invent strengths or weaknesses that are not supported by the transcript.
 
 Role:
 ${role}
 
-Focus Areas:
-${focusAreas.join(', ')}
+Role focus:
+${roleHint}
 
-Interview Transcript:
+Selected focus areas:
+${focusAreas.join(', ') || 'None provided'}
+
+Transcript evidence:
 ${transcript}
 
-Return ONLY valid JSON.
+Observed transcript signals:
+- Candidate answers: ${candidateAnswers.length}
+- Average answer length: ${analysis.averageWords.toFixed(1)} words
+- Short answers (<8 words): ${analysis.shortAnswers}
+- Detailed answers (>=25 words): ${analysis.detailedAnswers}
+- Uncertainty phrases: ${analysis.uncertaintyCount}
+- Communication markers: ${analysis.communicationCount}
+- Leadership markers: ${analysis.leadershipCount}
+- Problem-solving markers: ${analysis.problemSolvingCount}
+- Technical keyword matches: ${analysis.technicalCount}
+
+Scoring rules:
+1. Return scores from 0 to 100 for communicationScore, confidenceScore, leadershipScore, technicalScore, and problemSolvingScore.
+2. Use baselines instead of zeros when evidence is sparse, especially for leadership.
+3. Penalize repeated uncertainty language such as "I don't know", "not sure", "can't remember", "skip", "change topic", and "maybe".
+4. Reward detailed answers, clear structure, project explanations, ownership language, trade-off reasoning, and role-specific depth.
+5. The technical score must reflect ${roleHint} expectations and the selected focus areas.
+6. Every score must have a direct justification that cites the evidence used and what reduced the score.
+7. Provide 3-5 strengths, 3-5 opportunities, and 3-5 recommendedTopics.
+8. radarChart values must exactly mirror the five score fields.
+9. Return valid JSON only.
 
 Required JSON format:
-
 {
-"summary": "",
-"strengths": [],
-"opportunities": [],
-"followUpThemes": [],
-"confidence": 0,
-"overallScore": 0,
-"dimensions": [
-{
-"dimension": "",
-"score": 0
-}
-],
-"responses": [
-{
-"questionId": "",
-"answerText": "",
-"score": 0,
-"feedback": "",
-"goodPoints": [],
-"improvements": []
-}
-]
+  "summary": "",
+  "strengths": [],
+  "opportunities": [],
+  "recommendedTopics": [],
+  "scoreJustification": {
+    "communication": "",
+    "confidence": "",
+    "leadership": "",
+    "technical": "",
+    "problemSolving": ""
+  },
+  "radarChart": {
+    "communication": 0,
+    "confidence": 0,
+    "leadership": 0,
+    "technical": 0,
+    "problemSolving": 0
+  },
+  "communicationScore": 0,
+  "confidenceScore": 0,
+  "leadershipScore": 0,
+  "technicalScore": 0,
+  "problemSolvingScore": 0,
+  "overallScore": 0,
+  "confidence": 0,
+  "followUpThemes": [],
+  "dimensions": [
+    {
+      "dimension": "",
+      "score": 0
+    }
+  ],
+  "responses": []
 }
 `
 
-const completion = await groq.chat.completions.create({
-model: MODEL_NAME,
-messages: [
-{
-role: 'user',
-content: prompt
-}
-],
-temperature: 0.3,
-response_format: {
-type: 'json_object'
-}
-})
+  const completion = await groq.chat.completions.create({
+    model: MODEL_NAME,
+    messages: [
+      {
+        role: 'user',
+        content: prompt,
+      },
+    ],
+    temperature: 0.2,
+    response_format: {
+      type: 'json_object',
+    },
+  })
 
-const content =
-completion.choices[0]?.message?.content || '{}'
+  const content = completion.choices[0]?.message?.content || '{}'
 
-try {
-return JSON.parse(content)
-} catch (err) {
-console.error('Failed to parse Groq evaluation JSON:', content, err)
-throw new Error('Evaluation result was not valid JSON')
-}
+  try {
+    const parsed = JSON.parse(content)
+    const normalized = normalizeEvaluation(parsed, fallback)
+    normalized.followUpThemes = normalized.followUpThemes?.length ? normalized.followUpThemes : normalized.recommendedTopics
+    return normalized
+  } catch (err) {
+    console.error('Failed to parse Groq evaluation JSON:', content, err)
+    return fallback
+  }
 }

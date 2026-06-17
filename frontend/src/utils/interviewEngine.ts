@@ -407,114 +407,150 @@ async function generateEvaluationFallback(
   const candidateMessages = history.filter((m) => m.speaker === 'candidate')
   const answerCount = candidateMessages.length
 
-  let totalWords = 0
-  candidateMessages.forEach((m) => {
-    totalWords += m.content.split(/\s+/).length
-  })
-
+  const totalWords = candidateMessages.reduce((sum, message) => sum + message.content.split(/\s+/).filter(Boolean).length, 0)
   const avgLength = answerCount > 0 ? totalWords / answerCount : 0
+  const transcript = candidateMessages.map((message) => message.content.toLowerCase()).join(' ')
 
-  let technicalScore = 7.0
-  let communicationScore = 7.5
-  let confidenceScore = 7.0
+  const uncertaintyMatches = ["i don't know", 'not sure', "can't remember", 'skip', 'change topic', 'maybe'].reduce(
+    (count, phrase) => count + (transcript.split(phrase).length - 1),
+    0,
+  )
+  const leadershipMatches = ['led', 'owned', 'collaborated', 'partnered', 'mentored', 'initiated', 'resolved'].reduce(
+    (count, keyword) => count + (transcript.split(keyword).length - 1),
+    0,
+  )
+  const problemSolvingMatches = ['debug', 'trade-off', 'trade off', 'optimiz', 'root cause', 'hypothesi', 'performance'].reduce(
+    (count, keyword) => count + (transcript.split(keyword).length - 1),
+    0,
+  )
 
-  if (avgLength > 50) {
-    technicalScore = 8.8
-    communicationScore = 8.6
-    confidenceScore = 8.4
-  } else if (avgLength > 25) {
-    technicalScore = 7.8
-    communicationScore = 7.6
-    confidenceScore = 7.4
-  } else if (avgLength > 10) {
-    technicalScore = 6.8
-    communicationScore = 6.6
-    confidenceScore = 6.2
-  } else {
-    technicalScore = 5.2
-    communicationScore = 5.5
-    confidenceScore = 4.8
+  const roleText = role.toLowerCase()
+  const roleKeywords = roleText.includes('frontend')
+    ? ['react', 'typescript', 'javascript', 'css', 'component', 'state', 'render']
+    : roleText.includes('backend')
+      ? ['api', 'database', 'system design', 'auth', 'performance', 'cache']
+      : roleText.includes('hr')
+        ? ['communication', 'hiring', 'stakeholder', 'conflict', 'leadership']
+        : ['project', 'implementation', 'architecture', 'testing']
+
+  const technicalMatches = roleKeywords.reduce((count, keyword) => count + (transcript.split(keyword).length - 1), 0)
+  const structuredMarkers = ['first', 'second', 'finally', 'for example', 'because', 'in summary'].reduce(
+    (count, keyword) => count + (transcript.split(keyword).length - 1),
+    0,
+  )
+
+  const communicationScore = Math.max(0, Math.min(100, Math.round(45 + avgLength * 0.5 + structuredMarkers * 4 - uncertaintyMatches * 4)))
+  const confidenceScore = Math.max(0, Math.min(100, Math.round(48 + leadershipMatches * 3 - uncertaintyMatches * 7 + Math.max(0, avgLength - 15) * 0.2)))
+  const leadershipScore = Math.max(50, Math.min(100, Math.round(56 + leadershipMatches * 5 - uncertaintyMatches * 2)))
+  const technicalScore = Math.max(0, Math.min(100, Math.round(44 + technicalMatches * 4 + focusAreas.length * 3 + avgLength * 0.1)))
+  const problemSolvingScore = Math.max(0, Math.min(100, Math.round(46 + problemSolvingMatches * 5 + technicalMatches * 1.5 - uncertaintyMatches * 2)))
+  const overallScore = Math.round((communicationScore + confidenceScore + leadershipScore + technicalScore + problemSolvingScore) / 5)
+
+  const radarChart = {
+    communication: communicationScore,
+    confidence: confidenceScore,
+    leadership: leadershipScore,
+    technical: technicalScore,
+    problemSolving: problemSolvingScore,
   }
-
-  technicalScore = Math.min(10, Math.max(1, parseFloat((technicalScore + (Math.random() * 0.8 - 0.4)).toFixed(1))))
-  communicationScore = Math.min(10, Math.max(1, parseFloat((communicationScore + (Math.random() * 0.8 - 0.4)).toFixed(1))))
-  confidenceScore = Math.min(10, Math.max(1, parseFloat((confidenceScore + (Math.random() * 0.8 - 0.4)).toFixed(1))))
-
-  const overallScore = parseFloat(((technicalScore + communicationScore + confidenceScore) / 3).toFixed(1))
 
   const strengths = [
-    `Demonstrated clear familiarity with ${role} paradigms.`,
-    avgLength > 35 
-      ? 'Provided comprehensive answers with practical examples from your previous experience.' 
-      : 'Able to state technical answers concisely without getting sidetracked.'
+    avgLength >= 25
+      ? 'Provided detailed answers with enough context to evaluate reasoning.'
+      : 'Stayed responsive and answered the interview prompts directly.',
+    technicalMatches > 0
+      ? `Referenced role-relevant concepts tied to ${role}.`
+      : 'Stayed engaged with the interview flow and explained ideas as asked.',
   ]
 
-  if (focusAreas && focusAreas.length > 0) {
-    strengths.push(`Addressed core principles of ${focusAreas[0]} effectively in the early technical answers.`)
-  }
-
-  if (communicationScore >= 7.5) {
-    strengths.push('Exhibited solid communication skills, explaining technical concepts in a logical sequence.')
+  if (structuredMarkers > 0) {
+    strengths.push('Used some structure in explanations, which improved clarity.')
   }
 
   const opportunities = [
-    'Could incorporate more concrete architectural or design trade-offs in technical answers.'
+    'Add more concrete examples and decision-making detail to longer answers.',
   ]
 
-  if (avgLength < 30) {
-    opportunities.push('Try to elaborate more on your answers, detailing the technology stack and your exact contributions.')
-  } else {
-    opportunities.push('Focus on keeping explanations structured (e.g., using the STAR method for behavioral questions).')
+  if (uncertaintyMatches > 0) {
+    opportunities.push('Reduce repeated uncertainty language and answer with partial reasoning when exact recall is difficult.')
   }
 
-  if (focusAreas && focusAreas.length > 1) {
-    opportunities.push(`Deepen practical familiarity with secondary focus areas like ${focusAreas[1]} and edge scenarios.`)
+  if (problemSolvingScore < 75) {
+    opportunities.push('Explain the debugging path, alternatives, and trade-offs more explicitly.')
   }
 
-  const followUpThemes = [
-    `Advanced system architectural patterns in ${role} applications.`,
-    'Real-world scale and optimization case studies.',
-    'Behavioral storytelling under pressure.'
-  ]
+  if (focusAreas.length > 0) {
+    opportunities.push(`Deepen coverage of ${focusAreas[0]} with real project evidence.`)
+  }
 
-  const responses: Response[] = []
-  candidateMessages.forEach((candidateMsg, index) => {
-    let turnScore = Math.min(10, Math.round(overallScore + (Math.random() * 2 - 1)))
-    if (candidateMsg.content.split(/\s+/).length < 15) {
-      turnScore = Math.max(3, turnScore - 2)
-    }
+  const recommendedTopics = [
+    ...(roleText.includes('frontend')
+      ? ['React component architecture', 'TypeScript typing for complex UI flows']
+      : roleText.includes('backend')
+        ? ['API design and database trade-offs', 'System design and caching strategies']
+        : roleText.includes('hr')
+          ? ['Stakeholder communication', 'Conflict resolution and hiring calibration']
+          : ['Role-specific project depth', 'Implementation trade-offs']),
+    'Debugging and trade-off explanation',
+    ...(focusAreas.length > 0 ? [`Deepen coverage of ${focusAreas[0]}`] : []),
+  ].slice(0, 5)
 
-    responses.push({
+  const scoreJustification = {
+    communication: `Communication score: ${communicationScore}. Evidence: average answer length was ${avgLength.toFixed(1)} words with ${structuredMarkers} structure markers. Reduction: ${uncertaintyMatches} uncertainty phrases and shorter answers reduced clarity.`,
+    confidence: `Confidence score: ${confidenceScore}. Evidence: ${leadershipMatches} ownership markers appeared in the transcript. Reduction: repeated uncertainty language lowered decisiveness.`,
+    leadership: `Leadership score: ${leadershipScore}. Evidence: ${leadershipMatches} leadership or collaboration signals were present. Reduction: the transcript had limited explicit leadership stories, so the score stayed at a baseline instead of zero.`,
+    technical: `Technical score: ${technicalScore}. Evidence: ${technicalMatches} role-relevant terms matched ${role}. Reduction: the transcript did not always show deep implementation detail.`,
+    problemSolving: `Problem solving score: ${problemSolvingScore}. Evidence: ${problemSolvingMatches} reasoning or debugging markers were detected. Reduction: the candidate could explain trade-offs more explicitly.`,
+  }
+
+  const responses: Response[] = candidateMessages.map((candidateMsg, index) => {
+    const answerWords = candidateMsg.content.split(/\s+/).filter(Boolean).length
+    const answerScore = Math.max(1, Math.min(100, Math.round(overallScore + (answerWords > 20 ? 5 : -8) - uncertaintyMatches * 2)))
+
+    return {
       id: `resp-${index}-${Date.now()}`,
       sessionId: candidateMsg.sessionId,
       questionId: `q-${index}`,
       answerText: candidateMsg.content,
-      score: turnScore,
-      feedback: `This response covers the core elements. ${candidateMsg.content.split(/\s+/).length < 25 ? 'It is somewhat brief; consider expanding on the implementation details and your decision-making.' : 'It demonstrates clean logical structuring and vocabulary.'}`,
+      score: answerScore,
+      feedback:
+        answerWords < 20
+          ? 'The answer is understandable, but it would be stronger with more detail, a concrete example, and clearer reasoning.'
+          : 'The answer is well developed and shows stronger structure and relevance.',
       goodPoints: [
-        'Directly addresses the question.',
-        'Uses appropriate technical terms.'
+        'Addressed the prompt directly.',
+        answerWords >= 20 ? 'Provided supporting detail.' : 'Stayed concise.',
       ],
       improvements: [
-        'Provide a concrete project example.',
-        'Mention the trade-offs of the technology choices.'
-      ]
-    })
+        'Add a concrete example.',
+        'Explain the trade-offs or reasoning behind your approach.',
+      ],
+    }
   })
 
   return {
     sessionId: history[0]?.sessionId || `session-${Date.now()}`,
-    summary: `The candidate completed a comprehensive mock interview for the ${role} position. Their answers showed a ${overallScore >= 8 ? 'strong' : 'fair'} grasp of key concepts in ${focusAreas.join(', ')}. To reach the next level, they should focus on explaining technical trade-offs more deeply and structured behavioral delivery.`,
+    summary: `The candidate completed a ${overallScore >= 80 ? 'strong' : overallScore >= 65 ? 'solid' : 'developing'} mock interview for the ${role} position. The clearest evidence showed up in ${focusAreas.join(', ') || 'role fundamentals'}, with more room to deepen technical reasoning and answer structure.`,
     strengths,
     opportunities,
-    followUpThemes,
-    confidence: 85,
+    recommendedTopics,
+    followUpThemes: recommendedTopics,
+    scoreJustification,
+    radarChart,
+    communicationScore,
+    confidenceScore,
+    leadershipScore,
+    technicalScore,
+    problemSolvingScore,
     overallScore,
+    confidence: Math.max(55, Math.min(95, Math.round(70 + avgLength / 5 - uncertaintyMatches * 5))),
     dimensions: [
-      { dimension: 'Technical Knowledge', score: technicalScore },
-      { dimension: 'Communication', score: communicationScore },
-      { dimension: 'Confidence', score: confidenceScore }
+      { dimension: 'Communication', score: communicationScore / 10 },
+      { dimension: 'Confidence', score: confidenceScore / 10 },
+      { dimension: 'Leadership', score: leadershipScore / 10 },
+      { dimension: 'Technical', score: technicalScore / 10 },
+      { dimension: 'Problem Solving', score: problemSolvingScore / 10 },
     ],
-    responses
+    responses,
   }
 }

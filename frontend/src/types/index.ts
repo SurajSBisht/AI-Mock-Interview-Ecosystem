@@ -169,9 +169,29 @@ export interface AIEvaluationResult {
   summary: string
   strengths: string[]
   opportunities: string[]
+  recommendedTopics?: string[]
   followUpThemes: string[]
-  confidence?: number
+  communicationScore?: number
+  confidenceScore?: number
+  leadershipScore?: number
+  technicalScore?: number
+  problemSolvingScore?: number
   overallScore?: number
+  confidence?: number
+  radarChart?: {
+    communication: number
+    confidence: number
+    leadership: number
+    technical: number
+    problemSolving: number
+  }
+  scoreJustification?: {
+    communication: string
+    confidence: string
+    leadership: string
+    technical: string
+    problemSolving: string
+  }
   dimensions?: ScoreDimension[]
   responses?: Response[]
 }

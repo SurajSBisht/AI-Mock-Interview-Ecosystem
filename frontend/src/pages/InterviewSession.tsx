@@ -100,10 +100,6 @@ const ROLE_CONTEXT_OPTIONS: Record<string, string[]> = {
   HR: ['Communication', 'Conflict Resolution', 'Hiring', 'Culture'],
 }
 
-function formatDuration(minutes: InterviewDuration) {
-  return `${minutes} min`
-}
-
 function formatTime(seconds: number) {
   const safeSeconds = Math.max(0, seconds)
   const minutes = Math.floor(safeSeconds / 60)
