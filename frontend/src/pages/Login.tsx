@@ -1,4 +1,6 @@
-import { useNavigate, Link, Navigate } from 'react-router-dom'
+import { useNavigate, Link, Navigate, useLocation } from 'react-router-dom'
+import { useEffect } from 'react'
+import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { toast } from 'react-hot-toast'
@@ -8,29 +10,45 @@ import { Input } from '../components/ui/Input'
 import { ThemeToggle } from '../components/shared/ThemeToggle'
 import { useAuth } from '../context/AuthContext'
 import { loginSchema, type LoginFormData } from '../schemas/authSchemas'
+import { getApiErrorMessage } from '../utils/apiError'
 
 export function Login() {
-  const { login, isAuthenticated, isLoading } = useAuth()
+  const { login, isAuthenticated, isLoading, pendingVerificationEmail } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const locationEmail = (location.state as { email?: string } | null)?.email ?? ''
   const {
     register,
     handleSubmit,
+    reset,
     formState: { errors },
   } = useForm<LoginFormData>({
     resolver: zodResolver(loginSchema),
+    defaultValues: { email: locationEmail || pendingVerificationEmail },
   })
+
+  useEffect(() => {
+    const nextEmail = locationEmail || pendingVerificationEmail
+    if (nextEmail) {
+      reset({ email: nextEmail, password: '' })
+    }
+  }, [locationEmail, pendingVerificationEmail, reset])
 
   if (isAuthenticated) {
     return <Navigate to="/dashboard" replace />
   }
 
   const onSubmit = async (data: LoginFormData) => {
+    setIsSubmitting(true)
     try {
       await login(data.email, data.password)
       toast.success('Welcome back!')
       navigate('/dashboard')
-    } catch {
-      toast.error('Invalid credentials')
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, 'Invalid credentials'))
+    } finally {
+      setIsSubmitting(false)
     }
   }
 
@@ -67,7 +85,7 @@ export function Login() {
               error={errors.password?.message}
               {...register('password')}
             />
-            <Button type="submit" className="w-full" isLoading={isLoading}>
+            <Button type="submit" className="w-full" isLoading={isLoading || isSubmitting}>
               Sign In
             </Button>
           </form>

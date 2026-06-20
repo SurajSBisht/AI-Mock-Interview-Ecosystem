@@ -28,6 +28,10 @@ import {
   TEXT_IDLE_TIMEOUT_MS,
   VOICE_SILENCE_TIMEOUT_MS,
 } from '../utils/constants'
+import {
+  resolveVoiceForGender,
+  type VoiceGender,
+} from '../utils/voiceManager'
 import type {
   AIResponse,
   CandidateResponse,
@@ -216,6 +220,7 @@ export function InterviewSession() {
   const sessionTimerRef = useRef<number | null>(null)
   const spokenAssistantIdsRef = useRef(new Set<string>())
   const synthRef = useRef<SpeechSynthesisUtterance | null>(null)
+  const startListeningRef = useRef<(() => void) | null>(null)
 
   // Camera permissions and stream refs
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -243,7 +248,7 @@ export function InterviewSession() {
   const [isAwaitingAI, setIsAwaitingAI] = useState(false)
   const [remainingSeconds, setRemainingSeconds] = useState(0)
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([])
-  const [selectedVoiceIndex, setSelectedVoiceIndex] = useState(0)
+  const [selectedVoiceGender, setSelectedVoiceGender] = useState<VoiceGender>('female')
   const [speechSupported, setSpeechSupported] = useState(true)
   const [showHistory, setShowHistory] = useState(false)
 
@@ -307,42 +312,56 @@ const aiState: 'idle' | 'speaking' | 'listening' | 'thinking' = useMemo(() => {
 
   const speakText = useCallback(
     (text: string, resumeListeningAfter = false) => {
-      if (!text.trim()) {
+      const cleanedText = text.trim()
+
+      if (!cleanedText) {
         return
       }
 
-      const windowWithSpeech = window as SpeechSupportWindow
-      const voices = windowWithSpeech.speechSynthesis.getVoices()
-      const englishVoices = voices.filter((voice) => voice.lang.startsWith('en'))
+      const speechEngine = window.speechSynthesis
+      const voice = resolveVoiceForGender(availableVoices, selectedVoiceGender)
 
-      window.speechSynthesis.cancel()
+      speechEngine.cancel()
 
-      const utterance = new SpeechSynthesisUtterance(text)
+      const utterance = new SpeechSynthesisUtterance(cleanedText)
       synthRef.current = utterance
 
-      if (englishVoices[selectedVoiceIndex]) {
-        utterance.voice = englishVoices[selectedVoiceIndex]
+      if (voice) {
+        utterance.voice = voice
+        utterance.lang = voice.lang
       }
 
+      // Keep the delivery steady and readable. Stability matters more than fancy tuning here.
       utterance.rate = 0.94
       utterance.pitch = 1
       utterance.volume = 1
-      utterance.onstart = () => setIsSpeaking(true)
+      utterance.onstart = () => {
+        setIsSpeaking(true)
+      }
       utterance.onend = () => {
+        synthRef.current = null
         setIsSpeaking(false)
+
         if (resumeListeningAfter && config.answerMode === 'voice' && isLiveRef.current) {
           window.setTimeout(() => {
             if (isLiveRef.current && !isListeningRef.current) {
-              startListening()
+              startListeningRef.current?.()
             }
           }, 500)
         }
       }
-      utterance.onerror = () => setIsSpeaking(false)
+      utterance.onerror = () => {
+        synthRef.current = null
+        setIsSpeaking(false)
+      }
 
-      window.speechSynthesis.speak(utterance)
+      speechEngine.speak(utterance)
     },
-    [config.answerMode, selectedVoiceIndex],
+    [
+      availableVoices,
+      config.answerMode,
+      selectedVoiceGender,
+    ],
   )
 
   const commitDraft = useCallback(
@@ -546,7 +565,7 @@ if (
         recognition.stop()
         window.setTimeout(() => {
           if (isListeningRef.current && !isSpeaking) {
-            startListening()
+            startListeningRef.current?.()
           }
         }, 300)
       }
@@ -561,7 +580,7 @@ if (
       if (isListeningRef.current) {
         window.setTimeout(() => {
           if (isListeningRef.current && !isSpeaking) {
-            startListening()
+            startListeningRef.current?.()
           }
         }, 300)
       }
@@ -569,6 +588,14 @@ if (
 
     recognition.start()
   }, [isSpeaking])
+
+  useEffect(() => {
+    startListeningRef.current = startListening
+
+    return () => {
+      startListeningRef.current = null
+    }
+  }, [startListening])
 
   const completeSession = useCallback(async () => {
     if (!sessionId) {
@@ -674,11 +701,7 @@ if (
   useEffect(() => {
     const loadVoices = () => {
       const voices = window.speechSynthesis.getVoices()
-      const englishVoices = voices.filter((voice) => voice.lang.startsWith('en'))
-      setAvailableVoices(englishVoices)
-      if (englishVoices.length > 0) {
-        setSelectedVoiceIndex((current) => Math.min(current, englishVoices.length - 1))
-      }
+      setAvailableVoices(voices)
     }
 
     loadVoices()
@@ -1032,25 +1055,26 @@ if (
                 <label className="mb-2 block text-sm font-semibold text-gray-700 dark:text-gray-300">
                   Interviewer Voice
                 </label>
-                {availableVoices.length > 0 ? (
-                  <select
-                    value={selectedVoiceIndex}
-                    onChange={(event) => setSelectedVoiceIndex(Number(event.target.value))}
-                    className={cn(
-                      'w-full rounded-xl border border-gray-300 bg-white px-4 py-3 text-sm shadow-sm transition focus:outline-none focus:ring-2 focus:ring-primary dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100',
-                    )}
-                  >
-                    {availableVoices.map((voice, index) => (
-                      <option key={`${voice.name}-${index}`} value={index}>
-                        {voice.name}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-3 text-xs text-gray-400 dark:border-gray-700 dark:bg-gray-900">
-                    System synthesizer loading...
-                  </div>
-                )}
+                <select
+                  value={selectedVoiceGender}
+                  onChange={(event) => setSelectedVoiceGender(event.target.value as VoiceGender)}
+                  className={cn(
+                    'w-full rounded-xl border border-gray-300 bg-white px-4 py-3 text-sm shadow-sm transition focus:outline-none focus:ring-2 focus:ring-primary dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100',
+                  )}
+                >
+                  <option value="female">Female Voice</option>
+                  <option value="male">Male Voice</option>
+                </select>
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-xs text-gray-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400">
+                  <span className="font-semibold text-gray-700 dark:text-gray-200">
+                    {selectedVoiceGender === 'female' ? '🎙 Female Voice' : '🎙 Male Voice'}
+                  </span>
+                  <span>
+                    {availableVoices.length > 0
+                      ? 'Using the best available browser voice'
+                      : 'Browser voices are loading'}
+                  </span>
+                </div>
               </div>
             </div>
 
@@ -1257,6 +1281,12 @@ if (
         <div className="flex flex-wrap items-center gap-3">
           <Badge label={config.jobRole} variant="info" />
           <Badge label={isVoiceMode ? 'Voice Mode' : 'Text Mode'} variant="default" />
+          {isVoiceMode && (
+            <Badge
+              label={selectedVoiceGender === 'female' ? '🎙 Female Voice' : '🎙 Male Voice'}
+              variant="success"
+            />
+          )}
           <div className="h-4 w-px bg-gray-200 dark:bg-gray-700" />
           <div className="flex items-center gap-1.5 text-xs text-gray-500">
             <Clock className="h-4 w-4 text-primary" />

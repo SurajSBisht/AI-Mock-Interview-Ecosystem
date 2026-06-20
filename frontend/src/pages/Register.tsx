@@ -1,5 +1,6 @@
 import { Navigate, Link, useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
+import { useState } from 'react'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { toast } from 'react-hot-toast'
 import { Button } from '../components/ui/Button'
@@ -11,11 +12,12 @@ import {
   registerSchema,
   type RegisterFormData,
 } from '../schemas/authSchemas'
-import { cn } from '../utils/cn'
+import { getApiErrorMessage } from '../utils/apiError'
 
 export function Register() {
   const { register: registerUser, isAuthenticated, isLoading } = useAuth()
   const navigate = useNavigate()
+  const [isSubmitting, setIsSubmitting] = useState(false)
   const {
     register,
     handleSubmit,
@@ -29,12 +31,15 @@ export function Register() {
   }
 
   const onSubmit = async (data: RegisterFormData) => {
+    setIsSubmitting(true)
     try {
-      await registerUser(data.fullName, data.email, data.password, data.role)
-      toast.success('Account created!')
-      navigate('/dashboard')
-    } catch {
-      toast.error('Registration failed')
+      await registerUser(data.fullName, data.email, data.password)
+      toast.success('Account created. Check your email for the OTP.')
+      navigate('/verify-otp', { state: { email: data.email } })
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, 'Registration failed'))
+    } finally {
+      setIsSubmitting(false)
     }
   }
 
@@ -85,26 +90,7 @@ export function Register() {
               {...register('confirmPassword')}
             />
 
-            <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                I am a...
-              </label>
-              <select
-                className={cn(
-                  'w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm transition focus:outline-none focus:ring-2 focus:ring-primary dark:border-gray-600 dark:bg-gray-800',
-                )}
-                {...register('role')}
-              >
-                <option value="candidate">Candidate</option>
-                <option value="coach">Coach</option>
-                <option value="placement_officer">Placement Officer</option>
-              </select>
-              {errors.role ? (
-                <p className="mt-1 text-xs text-danger">{errors.role.message}</p>
-              ) : null}
-            </div>
-
-            <Button type="submit" className="w-full" isLoading={isLoading}>
+            <Button type="submit" className="w-full" isLoading={isLoading || isSubmitting}>
               Create Account
             </Button>
           </form>

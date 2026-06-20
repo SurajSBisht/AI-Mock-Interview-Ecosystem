@@ -1,165 +1,198 @@
 /* eslint-disable react-refresh/only-export-components */
-import {
-  createContext,
-  useContext,
-  useState,
-  type ReactNode,
-} from 'react'
-import { MOCK_TOKEN } from '../utils/constants'
-import { mockUser } from '../utils/mockData'
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { authApi } from '../services/authApi'
 import type { Role, User } from '../types'
+
+interface ApiUser {
+  id: string
+  fullName: string
+  email: string
+  role?: Role
+  createdAt: string
+  updatedAt?: string
+  isVerified?: boolean
+}
 
 interface AuthContextValue {
   user: User | null
   token: string | null
   isAuthenticated: boolean
   isLoading: boolean
+  pendingVerificationEmail: string
   login: (email: string, password: string) => Promise<void>
   logout: () => void
-  register: (
-    fullName: string,
-    email: string,
-    password: string,
-    role: Role,
-  ) => Promise<void>
+  register: (fullName: string, email: string, password: string) => Promise<void>
+  verifyOtp: (email: string, otp: string) => Promise<void>
+  resendOtp: (email: string) => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined)
 
-function sleep(ms: number) {
-  return new Promise<void>((resolve) => {
-    setTimeout(resolve, ms)
-  })
-}
+const AUTH_TOKEN_KEY = 'auth_token'
+const PENDING_EMAIL_KEY = 'pending_verification_email'
 
-function getRoleFromEmail(email: string): Role {
-  const normalizedEmail = email.toLowerCase()
-
-  if (normalizedEmail.includes('admin')) {
-    return 'admin'
-  }
-
-  if (normalizedEmail.includes('coach')) {
-    return 'coach'
-  }
-
-  if (normalizedEmail.includes('officer')) {
-    return 'placement_officer'
-  }
-
-  return 'candidate'
-}
-
-function createMockUser(role: Role, email?: string, fullName?: string): User {
+function toUser(apiUser: ApiUser): User {
   return {
-    ...mockUser,
-    id: `user-${Date.now()}`,
-    fullName: fullName ?? mockUser.fullName,
-    email: email ?? mockUser.email,
-    role,
-    createdAt: new Date().toISOString(),
+    id: apiUser.id,
+    fullName: apiUser.fullName,
+    email: apiUser.email,
+    role: apiUser.role ?? 'candidate',
+    createdAt: apiUser.createdAt,
+    updatedAt: apiUser.updatedAt,
+    isVerified: apiUser.isVerified,
   }
 }
 
-function readStoredRole(): Role {
-  const storedRole = localStorage.getItem('userRole')
+function storePendingEmail(email: string) {
+  localStorage.setItem(PENDING_EMAIL_KEY, email)
+}
 
-  if (
-    storedRole === 'candidate' ||
-    storedRole === 'coach' ||
-    storedRole === 'placement_officer' ||
-    storedRole === 'admin'
-  ) {
-    return storedRole
-  }
+function clearSession() {
+  localStorage.removeItem(AUTH_TOKEN_KEY)
+}
 
-  return 'candidate'
+function clearPendingEmail() {
+  localStorage.removeItem(PENDING_EMAIL_KEY)
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [token, setToken] = useState<string | null>(() =>
-    localStorage.getItem('token'),
+  const [token, setToken] = useState<string | null>(() => localStorage.getItem(AUTH_TOKEN_KEY))
+  const [user, setUser] = useState<User | null>(null)
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+  const [pendingVerificationEmail, setPendingVerificationEmail] = useState<string>(() =>
+    localStorage.getItem(PENDING_EMAIL_KEY) ?? '',
   )
-  const [user, setUser] = useState<User | null>(() => {
-    const storedToken = localStorage.getItem('token')
 
-    if (!storedToken) {
-      return null
-    }
-
-    return createMockUser(readStoredRole())
-  })
-  const [isAuthenticated, setIsAuthenticated] = useState(() =>
-    Boolean(localStorage.getItem('token')),
-  )
-  const [isLoading, setIsLoading] = useState(false)
-
-  const login = async (email: string, password: string) => {
-    void password
-    setIsLoading(true)
-    await sleep(1000)
-
-    const role = getRoleFromEmail(email)
-    const sessionUser = createMockUser(role, email)
-
-    localStorage.setItem('token', MOCK_TOKEN)
-    localStorage.setItem('userRole', role)
-    setUser(sessionUser)
-    setToken(MOCK_TOKEN)
+  const setSession = useCallback((nextToken: string, nextUser: User) => {
+    localStorage.setItem(AUTH_TOKEN_KEY, nextToken)
+    setToken(nextToken)
+    setUser(nextUser)
     setIsAuthenticated(true)
-    setIsLoading(false)
-  }
+  }, [])
 
-  const register = async (
-    fullName: string,
-    email: string,
-    password: string,
-    role: Role,
-  ) => {
-    void password
-    setIsLoading(true)
-    await sleep(1000)
-
-    const sessionUser: User = {
-      id: `user-${Date.now()}`,
-      fullName,
-      email,
-      role,
-      avatarUrl: mockUser.avatarUrl,
-      createdAt: new Date().toISOString(),
-    }
-
-    localStorage.setItem('token', MOCK_TOKEN)
-    localStorage.setItem('userRole', role)
-    setUser(sessionUser)
-    setToken(MOCK_TOKEN)
-    setIsAuthenticated(true)
-    setIsLoading(false)
-  }
-
-  const logout = () => {
-    setUser(null)
+  const logout = useCallback(() => {
+    clearSession()
+    clearPendingEmail()
     setToken(null)
+    setUser(null)
     setIsAuthenticated(false)
-    localStorage.removeItem('token')
-    localStorage.removeItem('userRole')
-  }
+    setPendingVerificationEmail('')
+  }, [])
 
-  return (
-    <AuthContext.Provider
-      value={{
-        user,
-        token,
-        isAuthenticated,
-        isLoading,
-        login,
-        logout,
-        register,
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
+  useEffect(() => {
+    const handleForcedLogout = () => {
+      logout()
+    }
+
+    window.addEventListener('auth:logout', handleForcedLogout)
+
+    return () => {
+      window.removeEventListener('auth:logout', handleForcedLogout)
+    }
+  }, [logout])
+
+  useEffect(() => {
+    const bootstrap = async () => {
+      const storedToken = localStorage.getItem(AUTH_TOKEN_KEY)
+
+      if (!storedToken) {
+        setIsLoading(false)
+        return
+      }
+
+      try {
+        const response = await authApi.get<{ user: ApiUser }>('/auth/me')
+        const nextUser = toUser(response.data.user)
+
+        setToken(storedToken)
+        setUser(nextUser)
+        setIsAuthenticated(true)
+      } catch {
+        logout()
+      } finally {
+        setIsLoading(false)
+      }
+    }
+
+    void bootstrap()
+  }, [logout])
+
+  const login = useCallback(async (email: string, password: string) => {
+    const response = await authApi.post<{ token: string; user: ApiUser }>('/auth/login', {
+      email,
+      password,
+    })
+
+    setSession(response.data.token, toUser(response.data.user))
+    clearPendingEmail()
+    setPendingVerificationEmail('')
+  }, [setSession])
+
+  const register = useCallback(async (fullName: string, email: string, password: string) => {
+    const normalizedEmail = email.trim().toLowerCase()
+
+    await authApi.post('/auth/register', {
+      fullName,
+      email: normalizedEmail,
+      password,
+    })
+
+    setPendingVerificationEmail(normalizedEmail)
+    storePendingEmail(normalizedEmail)
+  }, [])
+
+  const verifyOtp = useCallback(async (email: string, otp: string) => {
+    const normalizedEmail = email.trim().toLowerCase()
+
+    await authApi.post('/auth/verify-otp', {
+      email: normalizedEmail,
+      otp,
+    })
+
+    setPendingVerificationEmail(normalizedEmail)
+    storePendingEmail(normalizedEmail)
+  }, [])
+
+  const resendOtp = useCallback(async (email: string) => {
+    const normalizedEmail = email.trim().toLowerCase()
+
+    await authApi.post('/auth/resend-otp', {
+      email: normalizedEmail,
+    })
+
+    setPendingVerificationEmail(normalizedEmail)
+    storePendingEmail(normalizedEmail)
+  }, [])
+
+  const value = useMemo<AuthContextValue>(
+    () => ({
+      user,
+      token,
+      isAuthenticated,
+      isLoading,
+      pendingVerificationEmail,
+      login,
+      logout,
+      register,
+      verifyOtp,
+      resendOtp,
+    }),
+    [
+      isAuthenticated,
+      isLoading,
+      login,
+      logout,
+      pendingVerificationEmail,
+      register,
+      resendOtp,
+      token,
+      user,
+      verifyOtp,
+    ],
   )
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 
 export function useAuth() {

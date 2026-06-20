@@ -7,6 +7,8 @@ export interface User {
   role: Role
   avatarUrl?: string
   createdAt: string
+  updatedAt?: string
+  isVerified?: boolean
 }
 
 export interface AuthState {

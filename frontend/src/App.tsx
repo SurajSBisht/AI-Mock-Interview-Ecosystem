@@ -7,6 +7,7 @@ import { RoleGuard } from './components/shared/RoleGuard'
 import { Landing } from './pages/Landing'
 import { Login } from './pages/Login'
 import { Register } from './pages/Register'
+import { VerifyOtp } from './pages/VerifyOtp'
 import { Dashboard } from './pages/Dashboard'
 import { QuestionBank } from './pages/QuestionBank'
 import { InterviewSession } from './pages/InterviewSession'
@@ -40,6 +41,10 @@ function App() {
       <Route
         path="/register"
         element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Register />}
+      />
+      <Route
+        path="/verify-otp"
+        element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <VerifyOtp />}
       />
 
       <Route element={<ProtectedRoute />}>
