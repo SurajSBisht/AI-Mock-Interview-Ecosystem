@@ -96,7 +96,7 @@ export function Landing() {
                   'inline-flex items-center justify-center rounded-lg bg-primary px-6 py-3 text-base font-medium text-white transition-all duration-200 hover:bg-indigo-600 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',
                 )}
               >
-                Get Started Free
+                Register
               </Link>
               <Link
                 to="/login"
