@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   ArrowLeft,
@@ -24,42 +24,11 @@ import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { EmptyState } from '../components/ui/EmptyState'
+import { Spinner } from '../components/ui/Spinner'
 import { cn } from '../utils/cn'
 import { getMetricTone, getScoreBadgeClass, getScoreColorClass, normalizeEvaluation } from '../utils/evaluationReport'
 import type { InterviewArchive } from '../types'
-
-function readInterviewArchive(sessionId?: string): InterviewArchive | null {
-  const saved = localStorage.getItem('userSessions')
-  if (saved) {
-    try {
-      const list = JSON.parse(saved) as InterviewArchive[]
-      const found = list.find((s) => s.sessionId === sessionId)
-      if (found) return found
-    } catch (error) {
-      console.error(error)
-    }
-  }
-
-  const raw = localStorage.getItem('lastSession')
-  if (!raw) {
-    return null
-  }
-
-  try {
-    const parsed = JSON.parse(raw) as InterviewArchive
-    if (!parsed || typeof parsed !== 'object') {
-      return null
-    }
-
-    if (sessionId && parsed.sessionId !== sessionId) {
-      return null
-    }
-
-    return parsed
-  } catch {
-    return null
-  }
-}
+import { fetchReportBySessionId } from '../services/reportApi'
 
 function MetricTile({
   label,
@@ -86,9 +55,56 @@ function MetricTile({
 export function FeedbackReport() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const [archive, setArchive] = useState<InterviewArchive | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
 
-  const archive = useMemo(() => readInterviewArchive(id), [id])
+  useEffect(() => {
+    let isMounted = true
+
+    const loadReport = async () => {
+      if (!id) {
+        if (isMounted) {
+          setArchive(null)
+          setIsLoading(false)
+        }
+        return
+      }
+
+      try {
+        const report = await fetchReportBySessionId(id)
+
+        if (isMounted) {
+          setArchive(report)
+        }
+      } catch (error) {
+        console.error('Failed to load interview report:', error)
+
+        if (isMounted) {
+          setArchive(null)
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoading(false)
+        }
+      }
+    }
+
+    void loadReport()
+
+    return () => {
+      isMounted = false
+    }
+  }, [id])
+
   const evaluation = useMemo(() => normalizeEvaluation(archive?.evaluation ?? null), [archive?.evaluation])
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-10">
+        <Spinner size="md" />
+      </div>
+    )
+  }
 
   if (!archive) {
     return (

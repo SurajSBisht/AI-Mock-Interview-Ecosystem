@@ -21,6 +21,7 @@ import { useAuth } from '../context/AuthContext'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
+import { Modal } from '../components/ui/Modal'
 import { cn } from '../utils/cn'
 import {
   INTERVIEW_DURATION_OPTIONS,
@@ -46,6 +47,7 @@ import {
   generateEvaluation,
   uploadResume,
 } from '../utils/interviewEngine'
+import { saveReport } from '../services/reportApi'
 
 type InterviewDuration = (typeof INTERVIEW_DURATION_OPTIONS)[number]
 type AnswerMode = 'text' | 'voice'
@@ -147,6 +149,115 @@ function supportsSpeechRecognition(windowObject: Window) {
   return Boolean(support.SpeechRecognition || support.webkitSpeechRecognition)
 }
 
+type NavigationBlockerTx = {
+  path: string
+}
+
+function resolvePath(url: string) {
+  return new URL(url, window.location.origin).pathname + new URL(url, window.location.origin).search + new URL(url, window.location.origin).hash
+}
+
+function useBrowserNavigationBlocker(shouldBlock: boolean, navigate: ReturnType<typeof useNavigate>) {
+  const [blockedTx, setBlockedTx] = useState<NavigationBlockerTx | null>(null)
+  const allowNavigationRef = useRef(false)
+  const currentPathRef = useRef(`${window.location.pathname}${window.location.search}${window.location.hash}`)
+  const pendingPathRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    currentPathRef.current = `${window.location.pathname}${window.location.search}${window.location.hash}`
+  })
+
+  useEffect(() => {
+    if (!shouldBlock) {
+      allowNavigationRef.current = false
+      pendingPathRef.current = null
+      setBlockedTx(null)
+      return undefined
+    }
+
+    const originalPushState = window.history.pushState
+    const originalReplaceState = window.history.replaceState
+
+    const blockNavigation = (url: string) => {
+      pendingPathRef.current = resolvePath(url)
+      setBlockedTx({ path: pendingPathRef.current })
+      return false
+    }
+
+    window.history.pushState = function patchedPushState(state, title, url) {
+      if (allowNavigationRef.current) {
+        return originalPushState.call(window.history, state, title, url)
+      }
+
+      if (typeof url === 'string') {
+        return blockNavigation(url)
+      }
+
+      return originalPushState.call(window.history, state, title, url)
+    }
+
+    window.history.replaceState = function patchedReplaceState(state, title, url) {
+      if (allowNavigationRef.current) {
+        return originalReplaceState.call(window.history, state, title, url)
+      }
+
+      if (typeof url === 'string') {
+        return blockNavigation(url)
+      }
+
+      return originalReplaceState.call(window.history, state, title, url)
+    }
+
+    const handlePopState = (event: PopStateEvent) => {
+      if (allowNavigationRef.current || !shouldBlock) {
+        return
+      }
+
+      pendingPathRef.current = `${window.location.pathname}${window.location.search}${window.location.hash}`
+      window.history.pushState(window.history.state, '', currentPathRef.current)
+      event.stopImmediatePropagation()
+      setBlockedTx({ path: pendingPathRef.current })
+    }
+
+    window.addEventListener('popstate', handlePopState, true)
+
+    return () => {
+      window.history.pushState = originalPushState
+      window.history.replaceState = originalReplaceState
+      window.removeEventListener('popstate', handlePopState, true)
+      allowNavigationRef.current = false
+    }
+  }, [shouldBlock])
+
+  const reset = useCallback(() => {
+    allowNavigationRef.current = false
+    pendingPathRef.current = null
+    setBlockedTx(null)
+  }, [])
+
+  const proceed = useCallback(() => {
+    const nextPath = pendingPathRef.current
+
+    if (!nextPath) {
+      return
+    }
+
+    allowNavigationRef.current = true
+    setBlockedTx(null)
+    pendingPathRef.current = null
+    navigate(nextPath)
+    window.setTimeout(() => {
+      allowNavigationRef.current = false
+    }, 0)
+  }, [navigate])
+
+  return {
+    state: blockedTx ? 'blocked' : 'unblocked',
+    proceed,
+    reset,
+  }
+}
+
 function AudioVisualizer({ isActive, color = 'bg-primary' }: { isActive: boolean; color?: string }) {
   const bars = Array.from({ length: 15 })
   const delays = ['0.1s', '0.4s', '0.2s', '0.6s', '0.3s', '0.5s', '0.8s', '0.2s', '0.7s', '0.4s', '0.1s', '0.3s', '0.5s', '0.2s', '0.6s']
@@ -216,11 +327,13 @@ export function InterviewSession() {
   const isLiveRef = useRef(false)
   const isManualStopRef = useRef(false)
   const draftStartedAtRef = useRef<string | null>(null)
+  const finalTranscriptRef = useRef('')
+  const interimTranscriptRef = useRef('')
   const speechTimerRef = useRef<number | null>(null)
   const sessionTimerRef = useRef<number | null>(null)
   const spokenAssistantIdsRef = useRef(new Set<string>())
   const synthRef = useRef<SpeechSynthesisUtterance | null>(null)
-  const startListeningRef = useRef<(() => void) | null>(null)
+  const startListeningRef = useRef<((preserveTranscript?: boolean) => void) | null>(null)
 
   // Camera permissions and stream refs
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -251,14 +364,46 @@ export function InterviewSession() {
   const [selectedVoiceGender, setSelectedVoiceGender] = useState<VoiceGender>('female')
   const [speechSupported, setSpeechSupported] = useState(true)
   const [showHistory, setShowHistory] = useState(false)
+  const [showLeavePrompt, setShowLeavePrompt] = useState(false)
 
   const sessionDurationSeconds = config.durationMinutes * 60
+  const shouldBlockNavigation = phase === 'live' && Boolean(sessionId)
+  const blocker = useBrowserNavigationBlocker(shouldBlockNavigation, navigate)
   const currentContextChips = useMemo(
     () => getContextChips(config.jobRole),
     [config.jobRole],
   )
   const liveTranscript = config.answerMode === 'voice' ? currentTranscript : currentDraft
  const conversationTurnCount = candidateResponses.length + aiResponses.length
+
+  useEffect(() => {
+    if (!shouldBlockNavigation) {
+      return undefined
+    }
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload)
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+    }
+  }, [shouldBlockNavigation])
+
+  useEffect(() => {
+    if (blocker.state === 'blocked') {
+      setShowLeavePrompt(true)
+    }
+  }, [blocker.state])
+
+  useEffect(() => {
+    if (phase !== 'live') {
+      setShowLeavePrompt(false)
+    }
+  }, [phase])
 
 const handleResumeUpload = async (
   event: React.ChangeEvent<HTMLInputElement>
@@ -482,7 +627,7 @@ if (
     [cancelSpeech, config.answerMode, liveTranscript, sessionId, stopListening, messages, config.jobRole, config.techStacks, config.resumeContext],
   )
 
-  const startListening = useCallback(() => {
+  const startListening = useCallback((preserveTranscript = false) => {
     const windowWithSpeech = window as SpeechSupportWindow
     const SpeechRecognitionCtor =
       windowWithSpeech.SpeechRecognition ?? windowWithSpeech.webkitSpeechRecognition
@@ -505,9 +650,14 @@ if (
 
     recognitionRef.current = null
 
-    // Clear any previous transcript so UI reflects new input
-    setCurrentTranscript('')
-    setCurrentDraft('')
+    if (!preserveTranscript) {
+      finalTranscriptRef.current = ''
+      interimTranscriptRef.current = ''
+
+      // Clear any previous transcript so UI reflects new input
+      setCurrentTranscript('')
+      setCurrentDraft('')
+    }
 
     const recognition = new SpeechRecognitionCtor()
     recognitionRef.current = recognition
@@ -525,22 +675,27 @@ if (
     }
 
     recognition.onresult = (event: SpeechRecognitionEventLike) => {
-      // Debug: confirm recognition is actually producing events
-      console.log('[InterviewSession] onresult event:', {
-        resultIndex: event.resultIndex,
-        resultsLength: event.results?.length,
-        isFinal: event.results?.[event.resultIndex]?.isFinal,
-      })
-
-      let transcript = ''
-
+      let interimTranscript = ''
 
       for (let index = event.resultIndex; index < event.results.length; index += 1) {
         const result = event.results[index]
-        transcript += result[0].transcript
+        const transcriptPart = result[0].transcript.trim()
+
+        if (result.isFinal) {
+          finalTranscriptRef.current = [finalTranscriptRef.current, transcriptPart]
+            .filter(Boolean)
+            .join(' ')
+            .trim()
+        } else {
+          interimTranscript += transcriptPart
+        }
       }
 
-      const nextTranscript = transcript.trim()
+      interimTranscriptRef.current = interimTranscript.trim()
+      const nextTranscript = [finalTranscriptRef.current, interimTranscriptRef.current]
+        .filter(Boolean)
+        .join(' ')
+        .trim()
 
       setCurrentTranscript(nextTranscript)
       setCurrentDraft(nextTranscript)
@@ -565,7 +720,7 @@ if (
         recognition.stop()
         window.setTimeout(() => {
           if (isListeningRef.current && !isSpeaking) {
-            startListeningRef.current?.()
+            startListeningRef.current?.(true)
           }
         }, 300)
       }
@@ -580,7 +735,7 @@ if (
       if (isListeningRef.current) {
         window.setTimeout(() => {
           if (isListeningRef.current && !isSpeaking) {
-            startListeningRef.current?.()
+            startListeningRef.current?.(true)
           }
         }, 300)
       }
@@ -646,15 +801,20 @@ if (
       evaluation: evaluationResult,
     }
 
-    // Save completed archive in localStorage
-    const savedSessions = localStorage.getItem('userSessions')
-    const sessionList = savedSessions ? JSON.parse(savedSessions) : []
-    sessionList.unshift(archive)
-    localStorage.setItem('userSessions', JSON.stringify(sessionList))
-    localStorage.setItem('lastSession', JSON.stringify(archive))
+    // Persist the completed archive for the signed-in user.
+    try {
+      await saveReport(archive)
+    } catch (err) {
+      console.error('Error saving interview report:', err)
+      alert('Failed to save the interview report. Please try again.')
+      setIsAwaitingAI(false)
+      return
+    }
 
     setPhase('complete')
-    navigate(`/interview/${sessionId}/result`)
+    window.setTimeout(() => {
+      navigate(`/interview/${sessionId}/result`)
+    }, 0)
   }, [
     aiResponses,
     candidateResponses,
@@ -663,6 +823,7 @@ if (
     messages,
     navigate,
     sessionId,
+    saveReport,
     stopListening,
     user?.fullName,
     user?.id,
@@ -852,6 +1013,8 @@ if (
     setMessages([])
     setCandidateResponses([])
     setAiResponses([])
+    finalTranscriptRef.current = ''
+    interimTranscriptRef.current = ''
     setCurrentTranscript('')
     setCurrentDraft('')
     draftStartedAtRef.current = null
@@ -899,6 +1062,8 @@ if (
     isLiveRef.current = false
     cancelSpeech()
     stopListening()
+    finalTranscriptRef.current = ''
+    interimTranscriptRef.current = ''
     setPhase('config')
     setSessionId('')
     setMessages([])
@@ -940,6 +1105,19 @@ if (
     setCurrentDraft(value)
     setCurrentTranscript(value)
     setIsAwaitingAI(false)
+  }
+
+  const continueInterview = () => {
+    setShowLeavePrompt(false)
+    blocker.reset()
+  }
+
+  const leaveInterview = () => {
+    setShowLeavePrompt(false)
+    isLiveRef.current = false
+    cancelSpeech()
+    stopListening()
+    blocker.proceed()
   }
 
   if (phase === 'config') {
@@ -1632,6 +1810,29 @@ if (
           Reset session config
         </button>
       </div>
+
+      <Modal
+        isOpen={showLeavePrompt}
+        onClose={continueInterview}
+        title="Interview in progress"
+      >
+        <div className="space-y-5">
+          <p className="text-sm leading-6 text-gray-600 dark:text-gray-300">
+            Are you sure you want to leave?
+          </p>
+          <p className="text-sm leading-6 text-gray-600 dark:text-gray-300">
+            Your current interview progress will be lost.
+          </p>
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <Button type="button" variant="secondary" className="flex-1" onClick={continueInterview}>
+              Continue Interview
+            </Button>
+            <Button type="button" variant="danger" className="flex-1" onClick={leaveInterview}>
+              Leave Interview
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   )
 }

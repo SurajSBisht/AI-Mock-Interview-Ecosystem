@@ -9,20 +9,20 @@ import {
   Video,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
-import { mockSessions, mockUser } from '../utils/mockData'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { Spinner } from '../components/ui/Spinner'
 import { EmptyState } from '../components/ui/EmptyState'
 import { cn } from '../utils/cn'
+import { fetchReports, toDashboardReport, type DashboardReportRow } from '../services/reportApi'
 
 function getScoreClass(score: number) {
-  if (score >= 8) {
+  if (score >= 85) {
     return 'text-success'
   }
 
-  if (score >= 6) {
+  if (score >= 70) {
     return 'text-yellow-600 dark:text-yellow-400'
   }
 
@@ -37,34 +37,98 @@ function formatDate(dateValue: string) {
   })
 }
 
+function formatAverageScore(scores: number[]) {
+  if (scores.length === 0) {
+    return '0.0'
+  }
+
+  const total = scores.reduce((sum, score) => sum + score, 0)
+  return (total / scores.length).toFixed(1)
+}
+
+function formatDayKey(dateValue: string) {
+  const date = new Date(dateValue)
+  return new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()))
+    .toISOString()
+    .slice(0, 10)
+}
+
+function calculateActivityStreak(dateValues: string[]) {
+  const uniqueDays = Array.from(new Set(dateValues.map(formatDayKey))).sort((left, right) =>
+    right.localeCompare(left),
+  )
+
+  if (uniqueDays.length === 0) {
+    return 0
+  }
+
+  let streak = 1
+
+  for (let index = 1; index < uniqueDays.length; index += 1) {
+    const previousDate = new Date(`${uniqueDays[index - 1]}T00:00:00.000Z`)
+    const currentDate = new Date(`${uniqueDays[index]}T00:00:00.000Z`)
+    const diffDays = Math.round((previousDate.getTime() - currentDate.getTime()) / 86_400_000)
+
+    if (diffDays !== 1) {
+      break
+    }
+
+    streak += 1
+  }
+
+  return streak
+}
+
+function NoDataNotice({
+  title,
+  message,
+}: {
+  title: string
+  message: string
+}) {
+  return (
+    <Card>
+      <EmptyState icon={MessageSquare} title={title} message={message} />
+    </Card>
+  )
+}
+
 export function Dashboard() {
   const { user } = useAuth()
   const navigate = useNavigate()
   const [isLoading, setIsLoading] = useState(true)
-  const [sessions, setSessions] = useState<any[]>([])
+  const [sessions, setSessions] = useState<DashboardReportRow[]>([])
 
   useEffect(() => {
-    const timeoutId = window.setTimeout(() => {
-      setIsLoading(false)
-    }, 1000)
+    let isMounted = true
 
-    const saved = localStorage.getItem('userSessions')
-    const localSessions = saved ? JSON.parse(saved) : []
-    const formattedLocal = localSessions.map((arch: any) => ({
-      id: arch.sessionId,
-      candidateId: arch.metadata.candidateId,
-      jobRole: arch.metadata.jobRole,
-      difficulty: 'Medium',
-      totalQuestions: arch.candidateResponses.length,
-      answerMode: arch.metadata.answerMode,
-      status: arch.metadata.status,
-      overallScore: arch.evaluation?.overallScore,
-      createdAt: arch.metadata.createdAt || arch.completedAt,
-    }))
+    const loadReports = async () => {
+      try {
+        const reports = await fetchReports()
 
-    setSessions([...formattedLocal, ...mockSessions])
+        if (!isMounted) {
+          return
+        }
 
-    return () => window.clearTimeout(timeoutId)
+        setSessions(reports.map(toDashboardReport))
+      } catch (error) {
+        console.error('Failed to load reports:', error)
+
+        if (isMounted) {
+          setSessions([])
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoading(false)
+        }
+      }
+    }
+
+    void loadReports()
+
+    return () => {
+      isMounted = false
+    }
   }, [])
 
   if (isLoading) {
@@ -89,29 +153,24 @@ export function Dashboard() {
     return null
   }
 
-  const firstName =
-    user.fullName.split(' ').find((part) => part.length > 0) ?? mockUser.fullName
+  const firstName = user.fullName.split(' ').find((part) => part.length > 0) ?? user.fullName
 
-  const completedSessions = sessions.filter(s => s.status === 'completed')
+  const completedSessions = sessions.filter((session) => session.status === 'completed')
   const completedCount = completedSessions.length
-  
-  const scoredSessions = sessions.filter(s => typeof s.overallScore === 'number')
-  const averageScore = scoredSessions.length > 0
-    ? (scoredSessions.reduce((sum, s) => sum + (s.overallScore || 0), 0) / scoredSessions.length).toFixed(1)
-    : '7.8'
-
-  const pendingCount = sessions.filter(s => s.status === 'active' || s.status === 'pending').length
+  const scoredSessions = completedSessions.filter((session) => typeof session.overallScore === 'number')
+  const averageScore = formatAverageScore(scoredSessions.map((session) => session.overallScore ?? 0))
+  const dayStreak = calculateActivityStreak(completedSessions.map((session) => session.createdAt))
 
   const renderCandidateView = () => (
     <div className="space-y-8">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Welcome back, {firstName}! 👋</h1>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Welcome back, {firstName}!</h1>
         <p className="mt-2 text-gray-500 dark:text-gray-400">
           Ready for your next interview practice?
         </p>
       </div>
 
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
         {[
           {
             label: 'Sessions Completed',
@@ -121,21 +180,15 @@ export function Dashboard() {
           },
           {
             label: 'Average Score',
-            value: `${averageScore}/10`,
+            value: `${averageScore}/100`,
             icon: Trophy,
             iconClass: 'text-success',
           },
           {
             label: 'Day Streak',
-            value: '5 days',
+            value: `${dayStreak} days`,
             icon: Flame,
             iconClass: 'text-orange-500',
-          },
-          {
-            label: 'Pending Feedback',
-            value: String(pendingCount),
-            icon: MessageSquare,
-            iconClass: 'text-accent',
           },
         ].map((stat) => {
           const Icon = stat.icon
@@ -237,12 +290,17 @@ export function Dashboard() {
 
   const renderCoachView = () => (
     <div className="space-y-8">
-      <h1 className="text-2xl font-bold">Coach Dashboard</h1>
+      <div>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Coach Dashboard</h1>
+        <p className="mt-2 text-gray-500 dark:text-gray-400">
+          No coach analytics are connected yet.
+        </p>
+      </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         {[
-          { label: 'Pending Reviews', value: '4', icon: Clock },
-          { label: 'Completed Reviews', value: '18', icon: Trophy },
+          { label: 'Pending Reviews', value: '0', icon: Clock },
+          { label: 'Completed Reviews', value: '0', icon: Trophy },
         ].map((stat) => {
           const Icon = stat.icon
 
@@ -266,54 +324,27 @@ export function Dashboard() {
         })}
       </div>
 
-      <div className="grid grid-cols-1 gap-4">
-        {[
-          {
-            candidate: 'Aarav Sharma',
-            jobRole: 'Frontend Developer',
-            date: 'Jun 11, 2026',
-          },
-          {
-            candidate: 'Meera Patel',
-            jobRole: 'Full Stack Developer',
-            date: 'Jun 10, 2026',
-          },
-          {
-            candidate: 'Ishaan Verma',
-            jobRole: 'Data Scientist',
-            date: 'Jun 09, 2026',
-          },
-        ].map((session) => (
-          <Card key={`${session.candidate}-${session.date}`}>
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h3 className="font-semibold text-gray-900 dark:text-gray-100">
-                  {session.candidate}
-                </h3>
-                <p className="text-sm text-gray-500 dark:text-gray-400">
-                  {session.jobRole} • {session.date}
-                </p>
-              </div>
-              <div className="flex items-center gap-3">
-                <Badge label="Pending Review" variant="warning" />
-                <Button type="button">Review Now</Button>
-              </div>
-            </div>
-          </Card>
-        ))}
-      </div>
+      <NoDataNotice
+        title="No review queue"
+        message="Once coach review data is connected, it will appear here."
+      />
     </div>
   )
 
   const renderPlacementOfficerView = () => (
     <div className="space-y-8">
-      <h1 className="text-2xl font-bold">Placement Overview</h1>
+      <div>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Placement Overview</h1>
+        <p className="mt-2 text-gray-500 dark:text-gray-400">
+          No placement analytics are connected yet.
+        </p>
+      </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         {[
-          { label: 'Total Candidates', value: '42' },
-          { label: 'Average Score', value: '7.2' },
-          { label: 'Top Performers', value: '8' },
+          { label: 'Total Candidates', value: '0' },
+          { label: 'Average Score', value: '0.0' },
+          { label: 'Top Performers', value: '0' },
         ].map((stat) => (
           <Card key={stat.label}>
             <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">
@@ -326,64 +357,28 @@ export function Dashboard() {
         ))}
       </div>
 
-      <Card>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[640px] text-left text-sm">
-            <thead className="border-b border-gray-200 text-gray-500 dark:border-gray-700 dark:text-gray-400">
-              <tr>
-                <th className="py-3 pr-4 font-medium">Name</th>
-                <th className="py-3 pr-4 font-medium">Sessions</th>
-                <th className="py-3 pr-4 font-medium">Avg Score</th>
-                <th className="py-3 font-medium">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {[
-                { name: 'Aarav Sharma', sessions: 12, score: 8.8, status: 'Top Performer' },
-                { name: 'Meera Patel', sessions: 10, score: 8.2, status: 'Strong' },
-                { name: 'Ishaan Verma', sessions: 9, score: 7.9, status: 'Strong' },
-                { name: 'Ananya Gupta', sessions: 8, score: 7.5, status: 'Improving' },
-                { name: 'Rohan Singh', sessions: 7, score: 7.1, status: 'Improving' },
-              ].map((candidate) => (
-                <tr
-                  key={candidate.name}
-                  className="border-b border-gray-100 last:border-b-0 dark:border-gray-800"
-                >
-                  <td className="py-4 pr-4 text-gray-600 dark:text-gray-300">
-                    {candidate.name}
-                  </td>
-                  <td className="py-4 pr-4 text-gray-600 dark:text-gray-300">
-                    {candidate.sessions}
-                  </td>
-                  <td className="py-4 pr-4 text-gray-600 dark:text-gray-300">
-                    {candidate.score}
-                  </td>
-                  <td className="py-4">
-                    <Badge label={candidate.status} variant="info" />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Card>
-
-      <Button type="button" variant="secondary">
-        Export Report
-      </Button>
+      <NoDataNotice
+        title="No placement data"
+        message="Candidate reports are shown on the candidate dashboard only."
+      />
     </div>
   )
 
   const renderAdminView = () => (
     <div className="space-y-8">
-      <h1 className="text-2xl font-bold">Admin Overview</h1>
+      <div>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Admin Overview</h1>
+        <p className="mt-2 text-gray-500 dark:text-gray-400">
+          No admin analytics are connected yet.
+        </p>
+      </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
         {[
-          { label: 'Total Users', value: '156' },
-          { label: 'Sessions Today', value: '23' },
-          { label: 'Questions in Bank', value: '89' },
-          { label: 'Avg Platform Score', value: '7.4' },
+          { label: 'Total Users', value: '0' },
+          { label: 'Sessions Today', value: '0' },
+          { label: 'Questions in Bank', value: '0' },
+          { label: 'Avg Platform Score', value: '0.0' },
         ].map((stat) => (
           <Card key={stat.label}>
             <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">
@@ -396,14 +391,10 @@ export function Dashboard() {
         ))}
       </div>
 
-      <div className="flex flex-col gap-3 sm:flex-row">
-        <Button type="button" onClick={() => navigate('/admin')}>
-          Manage Users
-        </Button>
-        <Button type="button" variant="secondary" onClick={() => navigate('/questions')}>
-          Question Bank
-        </Button>
-      </div>
+      <NoDataNotice
+        title="No admin data"
+        message="Admin summary metrics are not wired to a data source yet."
+      />
     </div>
   )
 

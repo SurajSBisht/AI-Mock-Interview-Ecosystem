@@ -81,7 +81,7 @@ export function Login() {
             <Input
               label="Password"
               type="password"
-              placeholder="••••••••"
+              placeholder="Enter your password"
               error={errors.password?.message}
               {...register('password')}
             />

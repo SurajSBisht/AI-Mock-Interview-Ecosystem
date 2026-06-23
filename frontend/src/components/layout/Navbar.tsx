@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Bell, ChevronDown, LogOut, User as UserIcon } from 'lucide-react'
+import { ChevronDown, LogOut, User as UserIcon } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import { Badge } from '../ui/Badge'
 import { ThemeToggle } from '../shared/ThemeToggle'
@@ -29,17 +29,6 @@ export function Navbar() {
 
       <div className="flex items-center gap-3">
         <ThemeToggle />
-
-        <button
-          type="button"
-          className="relative rounded-full p-2 text-gray-600 transition hover:bg-gray-100 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-gray-100"
-          aria-label="Notifications"
-        >
-          <Bell className="h-5 w-5" />
-          <span className="absolute right-0 top-0 flex h-4 w-4 items-center justify-center rounded-full bg-danger text-xs text-white">
-            3
-          </span>
-        </button>
 
         <div className="relative">
           <button

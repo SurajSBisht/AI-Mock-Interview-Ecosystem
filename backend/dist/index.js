@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import authRouter from './routes/authRoutes.js';
+import reportRouter from './routes/reportRoutes.js';
 import interviewRouter from './routes/interviewRoutes.js';
 import { connectDatabase } from './config/database.js';
 import { HttpError } from './utils/httpError.js';
@@ -16,6 +17,7 @@ app.use(express.json());
 app.use('/api/auth', authRouter);
 // Register api endpoints
 app.use('/api/interview', interviewRouter);
+app.use('/api/reports', reportRouter);
 // Health check endpoint
 app.get('/health', (req, res) => {
     res.json({ status: 'healthy', service: 'AI Mock Interview Backend' });
