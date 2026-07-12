@@ -803,18 +803,20 @@ if (
 
     // Persist the completed archive for the signed-in user.
     try {
-      await saveReport(archive)
+      const savedReport = await saveReport(archive)
+      const reportSessionId = savedReport.sessionId || sessionId
+
+      setPhase('complete')
+      window.setTimeout(() => {
+        navigate(`/interview/${reportSessionId}/result`)
+      }, 0)
+      return
     } catch (err) {
       console.error('Error saving interview report:', err)
       alert('Failed to save the interview report. Please try again.')
       setIsAwaitingAI(false)
       return
     }
-
-    setPhase('complete')
-    window.setTimeout(() => {
-      navigate(`/interview/${sessionId}/result`)
-    }, 0)
   }, [
     aiResponses,
     candidateResponses,

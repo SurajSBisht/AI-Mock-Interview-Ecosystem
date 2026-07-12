@@ -21,8 +21,15 @@ export async function fetchReports() {
 }
 
 export async function fetchReportBySessionId(sessionId: string) {
-  const response = await authApi.get<InterviewArchive>(`/reports/${encodeURIComponent(sessionId)}`)
-  return response.data
+  const reports = await fetchReports()
+  const normalizedSessionId = sessionId.trim()
+  const found = reports.find((report) => report.sessionId === normalizedSessionId)
+
+  if (!found) {
+    throw new Error(`Interview report not found for session ${normalizedSessionId}`)
+  }
+
+  return found
 }
 
 export async function saveReport(report: InterviewArchive) {
